@@ -47,6 +47,10 @@
 
 #include "compat.h"
 
+#ifdef ENABLE_ADDONS
+#include "addons/syscall_addons.h"
+#endif
+
 /**
  * Copy in @path a C string (PATH_MAX bytes max.) from the @tracee's
  * memory address space pointed to by the @sysarg argument of the
@@ -221,7 +225,17 @@ static int translate_syscall_enter(struct tracee_info *tracee)
 	else {
 		notice(WARNING, INTERNAL, "unknown ABI (%p)", tracee->uregs);
 		status = -ENOSYS;
+		goto end;
 	}
+#ifdef ENABLE_ADDONS
+	/* Calls addons, unless status is negative with previous processing.  */
+	if (status >= 0) {
+		int addons_status = syscall_addons_enter(tracee);
+		if (addons_status < 0) {
+			status = addons_status;
+		}
+	}
+#endif
 
 end:
 
@@ -320,6 +334,14 @@ static int translate_syscall_exit(struct tracee_info *tracee)
 	VERBOSE(3, "pid %d:        -> 0x%lx [0x%lx]", tracee->pid, result,
 		peek_ureg(tracee, STACK_POINTER));
 
+#ifdef ENABLE_ADDONS
+	/* Calls addons, if the returned status is negative, proot processing is skipped.  */
+	status = syscall_addons_exit(tracee);
+	if (status < 0) {
+		status = poke_ureg(tracee, SYSARG_RESULT, (word_t) status);
+		goto end;
+	}
+#endif
 	/* Translate output arguments. */
 	if (tracee->uregs == uregs) {
 		#include SYSNUM_HEADER

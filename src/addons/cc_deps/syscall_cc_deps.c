@@ -1,0 +1,189 @@
+/* -*- c-set-style: "K&R"; c-basic-offset: 8 -*-
+ *
+ * This file is part of PRoot.
+ *
+ * Copyright (C) 2010, 2011 STMicroelectronics
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301 USA.
+ *
+ * Author: Cedric VINCENT (cedric.vincent@st.com)
+ *         Christophe Guillon (christophe.guillon@st.com)
+ */
+
+/**
+ * Generates list of exec'd gcc commands
+ */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "tracee/info.h"
+#include "tracee/ureg.h"
+#include "syscall/syscall.h"
+#include "execve/args.h"
+#include "addons/syscall_addons.h"
+
+#include SYSNUM_HEADER
+
+/**
+ * Defines OUTPUT macro for all addon outputs.
+ */
+#define OUTPUT(...) fprintf(output_file, __VA_ARGS__);
+#define VERBOSE(...) do { if (verbose) OUTPUT(__VA_ARGS__); } while (0)
+
+/**
+ * Local variables, self describing.
+ */
+static int active;
+static int verbose;
+static int driver_path_len;
+static const char *driver_path;
+static const char *output;
+static FILE *output_file;
+
+/**
+ * Format execve.
+ */
+static void format_execve(const char *path, char * const argv[], char * const envp[])
+{
+  const char *arg;
+  const char *sep;
+  if (path != NULL) {
+    OUTPUT("\"%s\"", path);
+  }
+  OUTPUT(": ");
+  if (argv != NULL) {
+    sep = "";
+    while ((arg = *argv++) != NULL) {
+      OUTPUT("%s\"%s\"", sep, arg);
+      sep = ", ";
+    }
+  }
+  OUTPUT(": ");
+  if (envp != NULL) {
+    sep = "";
+    while ((arg = *envp++) != NULL) {
+      OUTPUT("%s\"%s\"", sep, arg);
+      sep = ", ";
+    }
+    sep = ": ";
+  }
+  OUTPUT("\n");
+}
+
+
+/**
+ * Process execve.
+ */
+static int process_execve(struct tracee_info *tracee)
+{
+  char u_path[PATH_MAX];
+  int argv0_len;
+  char **argv = NULL;
+  int status;
+  
+  status = get_sysarg_path(tracee, u_path, SYSARG_1);
+  if (status < 0)
+    return status;
+  
+  status = get_args(tracee, &argv, SYSARG_2);
+  if (status < 0)
+    return status;
+
+  if (verbose) {
+    OUTPUT("VERB: execve: ");
+    format_execve(u_path, argv, NULL);
+  }
+  /* Check whether we are executing the compiler driver.
+     Compares with argv0 (not the actual path, as some driver installation may be symlinks)
+     and check if argv0 is driver_path or ends with '/' + driver_path.
+  */
+  argv0_len = strlen(argv[0]);
+  if (argv0_len >= driver_path_len &&
+      strcmp(driver_path, &argv[0][argv0_len-driver_path_len]) == 0 &&
+      (argv0_len == driver_path_len ||
+       argv[0][argv0_len-driver_path_len-1] == '/'))
+    {
+      OUTPUT("CC: ");
+      format_execve(u_path, argv, NULL);
+    }
+  return 0;
+}
+
+
+/**
+ * Process syscall entries.
+ */
+static int addon_enter(struct tracee_info *tracee)
+{
+  if (!active) return 0;
+  int status = 0;
+  switch(tracee->sysnum) {
+  case PR_execve:
+    status = process_execve(tracee);
+  }
+  return status;
+}
+
+
+/**
+ * Process syscall exits.
+ */
+static int addon_exit(struct tracee_info *tracee)
+{
+  if (!active) return 0;
+  
+  return 0;
+}
+
+
+/**
+ * Register the current addon through a constructor function.
+ */
+static struct addon_info addon = { &addon_enter, &addon_exit };
+
+static void __attribute__((constructor)) register_addon(void)
+{
+  syscall_addons_register(&addon);
+  active = getenv("PROOT_ADDON_CC_DEPS") != NULL;
+  verbose = getenv("PROOT_ADDON_CC_DEPS_VERBOSE") != NULL;
+  output = getenv("PROOT_ADDON_CC_DEPS_OUTPUT");
+  if (output == NULL || *output == '\0')
+    output = ":stderr";
+  driver_path = getenv("PROOT_ADDON_CC_DEPS_DRIVER");
+  if (driver_path == NULL)
+    driver_path = "gcc";
+  driver_path_len = strlen(driver_path);
+
+  /* Open output file.  */
+  if (strcmp(output, ":stdout") == 0)
+    output_file = stdout;
+  else if (strcmp(output, ":stderr") == 0)
+    output_file = stderr;
+  else {
+    const char *mode = "w";
+    if (*output == '+') {
+      mode = "a";
+      output++;
+    }
+    output_file = fopen(output, mode);
+    if (output_file == NULL) {
+      perror("error: cc_deps addon");
+      exit(1);
+    }
+    setlinebuf(output_file);
+  }
+}

@@ -29,6 +29,14 @@ OBJECTS = cli.o			\
 	tracee/mem.o		\
 	tracee/ureg.o
 
+# The ENABLE_ADDONS must be a space separated list of addons
+ifneq ($(ENABLE_ADDONS),)
+OBJECTS += addons/syscall_addons.o
+CPPFLAGS += -DENABLE_ADDONS
+OBJECTS += $(subst .c,.o,$(wildcard $(addsuffix /*.c, $(addprefix addons/, $(ENABLE_ADDONS)))))
+endif
+
+
 .DEFAULT_GOAL = proot
 all: proot
 
