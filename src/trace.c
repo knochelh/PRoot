@@ -203,6 +203,25 @@ int event_loop()
 				signal = 0;
 				break;
 
+			case SIGSTOP:
+				/* Do not propagate SIGSTOP. 
+				   Actually man ptrace specifies that SIGSTOP passed as the
+				   data argument to PTRACE_SYSCALL is not delivered, but this
+				   feature is not honored (or maybe it is undocumented that
+				   using TRACESYSGOOD has the effect of changing this policy).
+				   Anyway, as the SIGSTOP signal is launched at each new
+				   process creation (ref to launch_process()), the effect of
+				   propagating this signal is that the child process is
+				   stopped/continued twice at each new process creation.
+				   On some systems this also has the effect of outputing to
+				   the tty a SIGSTOP event notification for the child process,
+				   which is not expected.
+				   It is an opened question whether we should ignore SIGSTOP,
+				   as done there, or if there can be an alternative to 
+				   the SIGSTOP trick in launch_process().
+				*/
+				signal = 0;
+				break;
 			default:
 				/* Propagate all other signals. */
 				break;
