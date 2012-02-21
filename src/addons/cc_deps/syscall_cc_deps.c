@@ -41,7 +41,7 @@
 /**
  * Defines OUTPUT macro for all addon outputs.
  */
-#define OUTPUT(...) fprintf(stderr, __VA_ARGS__);
+#define OUTPUT(...) fprintf(output_file, __VA_ARGS__);
 #define VERBOSE(...) do { if (verbose) OUTPUT(__VA_ARGS__); } while (0)
 
 /**
@@ -51,6 +51,8 @@ static int active;
 static int verbose;
 static int driver_path_len;
 static const char *driver_path;
+static const char *output;
+static FILE *output_file;
 
 /**
  * Format execve.
@@ -158,8 +160,30 @@ static void __attribute__((constructor)) register_addon(void)
   syscall_addons_register(&addon);
   active = getenv("PROOT_ADDON_CC_DEPS") != NULL;
   verbose = getenv("PROOT_ADDON_CC_DEPS_VERBOSE") != NULL;
+  output = getenv("PROOT_ADDON_CC_DEPS_OUTPUT");
+  if (output == NULL || *output == '\0')
+    output = ":stderr";
   driver_path = getenv("PROOT_ADDON_CC_DEPS_DRIVER");
   if (driver_path == NULL)
     driver_path = "gcc";
   driver_path_len = strlen(driver_path);
+
+  /* Open output file.  */
+  if (strcmp(output, ":stdout") == 0)
+    output_file = stdout;
+  else if (strcmp(output, ":stderr") == 0)
+    output_file = stderr;
+  else {
+    const char *mode = "w";
+    if (*output == '+') {
+      mode = "a";
+      output++;
+    }
+    output_file = fopen(output, mode);
+    if (output_file == NULL) {
+      perror("error: cc_deps addon");
+      exit(1);
+    }
+    setlinebuf(output_file);
+  }
 }
