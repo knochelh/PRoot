@@ -67,6 +67,10 @@ CHECK_VERSION = VERSION=$$($(GIT) describe --tags --dirty --abbrev=8 --always 2>
 		then /bin/echo -e "\#undef VERSION\n\#define VERSION \"$${VERSION}\""; \
 		fi;
 
+CHECK_ADDONS = 	if [ ! -z "$(ENABLE_ADDONS)" ]; \
+		then /bin/echo -e "\#define ADDONS \"$(ENABLE_ADDONS)\""; \
+		fi;
+
 .SILENT .IGNORE .INTERMEDIATE: .check_readlinkat .check_readlinkat.o
 
 .check_readlinkat.o: .check_readlinkat.c
@@ -84,6 +88,7 @@ build.h: .check_readlinkat
 	$(Q)echo "#define BUILD_H"      >> $@
 	$(Q)sh -c '$(CHECK_VERSION)'     >> $@
 	$(Q)sh -c '$(CHECK_READLINKAT)'  >> $@
+	$(Q)sh -c '$(CHECK_ADDONS)'  >> $@
 	$(Q)echo "#endif /* BUILD_H */" >> $@
 
 ######################################################################

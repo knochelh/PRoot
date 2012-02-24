@@ -229,6 +229,9 @@ static void handle_option_v(char *value)
 static void handle_option_V(char *value)
 {
 	printf("PRoot %s: %s.\n", VERSION, SUBTITLE);
+#ifdef ADDONS
+	printf("Addons: %s\n", ADDONS);
+#endif
 	printf("Contact cedric.vincent@gmail.com for bug reports, suggestions, ...\n");
 	printf("Copyright (C) 2010, 2011 STMicroelectronics, licensed under GPL v2 or later.\n");
 	exit(EXIT_FAILURE);
@@ -282,7 +285,12 @@ static void print_usage(bool detailed)
 
 #define DETAIL(a) if (detailed) a
 
-	DETAIL(printf("PRoot %s: %s.\n\n", VERSION, SUBTITLE));
+	DETAIL(printf("PRoot %s: %s.\n", VERSION, SUBTITLE));
+#ifdef ADDONS
+	DETAIL(printf("Addons: %s\n", ADDONS));
+#endif
+	DETAIL(printf("\n"));
+
 	printf("Usage:\n  %s\n", SYNOPSIS);
 	DETAIL(printf("\n"));
 
