@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h> /* readlink(3p) */
 #include "tracee/info.h"
 #include "tracee/ureg.h"
 #include "syscall/syscall.h"
@@ -55,9 +56,25 @@ static const char *output;
 static FILE *output_file;
 
 /**
+ * Get current dir for the specified process.
+ */
+static int get_pid_cwd(int pid, char path[PATH_MAX])
+{
+	char buffer[256];
+	int n;
+	snprintf(buffer, sizeof(buffer), "/proc/%d/cwd", pid);
+	if ((n = readlink(buffer, path, PATH_MAX-1)) == -1) {
+		return -1;
+	}
+	path[n] = '\0';
+	return 0;
+}
+
+
+/**
  * Format execve.
  */
-static void format_execve(const char *path, char * const argv[], char * const envp[])
+static void format_execve(const char *path, char * const argv[], char * const envp[], const char *cwd)
 {
   const char *arg;
   const char *sep;
@@ -81,6 +98,10 @@ static void format_execve(const char *path, char * const argv[], char * const en
     }
     sep = ": ";
   }
+  OUTPUT(": ");
+  if (cwd != NULL) {
+    OUTPUT("\"%s\"", cwd);
+  }
   OUTPUT("\n");
 }
 
@@ -91,6 +112,7 @@ static void format_execve(const char *path, char * const argv[], char * const en
 static int process_execve(struct tracee_info *tracee)
 {
   char u_path[PATH_MAX];
+  char cwd_path[PATH_MAX];
   int argv0_len;
   char **argv = NULL;
   int status;
@@ -103,9 +125,13 @@ static int process_execve(struct tracee_info *tracee)
   if (status < 0)
     return status;
 
+  status = get_pid_cwd(tracee->pid, cwd_path);
+  if (status < 0)
+    return status;
+  
   if (verbose) {
     OUTPUT("VERB: execve: ");
-    format_execve(u_path, argv, NULL);
+    format_execve(u_path, argv, NULL, cwd_path);
   }
   /* Check whether we are executing the compiler driver.
      Compares with argv0 (not the actual path, as some driver installation may be symlinks)
@@ -118,7 +144,7 @@ static int process_execve(struct tracee_info *tracee)
        argv[0][argv0_len-driver_path_len-1] == '/'))
     {
       OUTPUT("CC: ");
-      format_execve(u_path, argv, NULL);
+      format_execve(u_path, argv, NULL, cwd_path);
     }
   return 0;
 }
