@@ -30,7 +30,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h> /* readlink(3p) */
+#include <unistd.h> /* readlink (3p) */
+#include <regex.h> /* regcomp, regexec, regfree (3p) */
+#include <libgen.h> /* basename (3p) */
 #include "tracee/info.h"
 #include "tracee/ureg.h"
 #include "syscall/syscall.h"
@@ -50,10 +52,10 @@
  */
 static int active;
 static int verbose;
-static int driver_path_len;
-static const char *driver_path;
+static const char *driver_regexp;
 static const char *output;
 static FILE *output_file;
+static regex_t driver_re;
 
 /**
  * Get current dir for the specified process.
@@ -113,7 +115,6 @@ static int process_execve(struct tracee_info *tracee)
 {
 	char u_path[PATH_MAX];
 	char cwd_path[PATH_MAX];
-	int argv0_len;
 	char **argv = NULL;
 	int status;
   
@@ -135,17 +136,12 @@ static int process_execve(struct tracee_info *tracee)
 	}
 	/* Check whether we are executing the compiler driver.
 	   Compares with argv0 (not the actual path, as some driver installation may be symlinks)
-	   and check if argv0 is driver_path or ends with '/' + driver_path.
+	   and check if basename argv0 matches driver_re.
 	*/
-	argv0_len = strlen(argv[0]);
-	if (argv0_len >= driver_path_len &&
-	    strcmp(driver_path, &argv[0][argv0_len-driver_path_len]) == 0 &&
-	    (argv0_len == driver_path_len ||
-	     argv[0][argv0_len-driver_path_len-1] == '/'))
-		{
-			OUTPUT("CC: ");
-			format_execve(u_path, argv, NULL, cwd_path);
-		}
+	if (regexec(&driver_re, basename(argv[0]), 0, NULL, 0) == 0) {
+		OUTPUT("CC_DEPS: ");
+		format_execve(u_path, argv, NULL, cwd_path);
+	}
 	return 0;
 }
 
@@ -181,7 +177,7 @@ static int addon_exit(struct tracee_info *tracee)
  */
 static struct addon_info addon = { &addon_enter, &addon_exit };
 
-static void __attribute__((constructor)) register_addon(void)
+static void __attribute__((constructor)) init(void)
 {
 	syscall_addons_register(&addon);
 	active = getenv("PROOT_ADDON_CC_DEPS") != NULL;
@@ -189,10 +185,14 @@ static void __attribute__((constructor)) register_addon(void)
 	output = getenv("PROOT_ADDON_CC_DEPS_OUTPUT");
 	if (output == NULL || *output == '\0')
 		output = ":stderr";
-	driver_path = getenv("PROOT_ADDON_CC_DEPS_DRIVER");
-	if (driver_path == NULL)
-		driver_path = "gcc";
-	driver_path_len = strlen(driver_path);
+	driver_regexp = getenv("PROOT_ADDON_CC_DEPS_CCRE");
+	if (driver_regexp == NULL)
+		driver_regexp = "^\\(gcc\\|g++\\|cc\\|c++\\)$";
+	if (regcomp(&driver_re, driver_regexp, REG_NOSUB|REG_NEWLINE) != 0) {
+		fprintf(stderr, "error: cc_deps addon: error in driver path regexp: %s\n",
+			driver_regexp);
+		exit(1);
+	}
   
 	/* Open output file.  */
 	if (strcmp(output, ":stdout") == 0)
@@ -207,9 +207,18 @@ static void __attribute__((constructor)) register_addon(void)
 		}
 		output_file = fopen(output, mode);
 		if (output_file == NULL) {
-			perror("error: cc_deps addon");
+			perror("error: cc_deps addon output file");
 			exit(1);
 		}
 		setlinebuf(output_file);
 	}
+	if (verbose) {
+		OUTPUT("cc_deps: output file: %s\n", output);
+		OUTPUT("cc_deps: driver regexp: %s\n", driver_regexp);
+	}
+}
+
+static void __attribute__((destructor)) fini(void)
+{
+	regfree(&driver_re);
 }
