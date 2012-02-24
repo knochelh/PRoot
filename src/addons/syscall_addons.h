@@ -37,9 +37,9 @@
  * A next field is for internal usage by register/unregister functions.
  */
 struct addon_info {
-  int (*enter)(struct tracee_info *tracee);
-  int (*exit)(struct tracee_info *tracee);
-  struct addon_info *next;
+	int (*enter)(struct tracee_info *tracee);
+	int (*exit)(struct tracee_info *tracee);
+	struct addon_info *next;
 };
 
 

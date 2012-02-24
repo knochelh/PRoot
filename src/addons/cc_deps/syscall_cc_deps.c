@@ -76,33 +76,33 @@ static int get_pid_cwd(int pid, char path[PATH_MAX])
  */
 static void format_execve(const char *path, char * const argv[], char * const envp[], const char *cwd)
 {
-  const char *arg;
-  const char *sep;
-  if (path != NULL) {
-    OUTPUT("\"%s\"", path);
-  }
-  OUTPUT(": ");
-  if (argv != NULL) {
-    sep = "";
-    while ((arg = *argv++) != NULL) {
-      OUTPUT("%s\"%s\"", sep, arg);
-      sep = ", ";
-    }
-  }
-  OUTPUT(": ");
-  if (envp != NULL) {
-    sep = "";
-    while ((arg = *envp++) != NULL) {
-      OUTPUT("%s\"%s\"", sep, arg);
-      sep = ", ";
-    }
-    sep = ": ";
-  }
-  OUTPUT(": ");
-  if (cwd != NULL) {
-    OUTPUT("\"%s\"", cwd);
-  }
-  OUTPUT("\n");
+	const char *arg;
+	const char *sep;
+	if (path != NULL) {
+		OUTPUT("\"%s\"", path);
+	}
+	OUTPUT(": ");
+	if (argv != NULL) {
+		sep = "";
+		while ((arg = *argv++) != NULL) {
+			OUTPUT("%s\"%s\"", sep, arg);
+			sep = ", ";
+		}
+	}
+	OUTPUT(": ");
+	if (envp != NULL) {
+		sep = "";
+		while ((arg = *envp++) != NULL) {
+			OUTPUT("%s\"%s\"", sep, arg);
+			sep = ", ";
+		}
+		sep = ": ";
+	}
+	OUTPUT(": ");
+	if (cwd != NULL) {
+		OUTPUT("\"%s\"", cwd);
+	}
+	OUTPUT("\n");
 }
 
 
@@ -111,42 +111,42 @@ static void format_execve(const char *path, char * const argv[], char * const en
  */
 static int process_execve(struct tracee_info *tracee)
 {
-  char u_path[PATH_MAX];
-  char cwd_path[PATH_MAX];
-  int argv0_len;
-  char **argv = NULL;
-  int status;
+	char u_path[PATH_MAX];
+	char cwd_path[PATH_MAX];
+	int argv0_len;
+	char **argv = NULL;
+	int status;
   
-  status = get_sysarg_path(tracee, u_path, SYSARG_1);
-  if (status < 0)
-    return status;
+	status = get_sysarg_path(tracee, u_path, SYSARG_1);
+	if (status < 0)
+		return status;
   
-  status = get_args(tracee, &argv, SYSARG_2);
-  if (status < 0)
-    return status;
+	status = get_args(tracee, &argv, SYSARG_2);
+	if (status < 0)
+		return status;
 
-  status = get_pid_cwd(tracee->pid, cwd_path);
-  if (status < 0)
-    return status;
+	status = get_pid_cwd(tracee->pid, cwd_path);
+	if (status < 0)
+		return status;
   
-  if (verbose) {
-    OUTPUT("VERB: execve: ");
-    format_execve(u_path, argv, NULL, cwd_path);
-  }
-  /* Check whether we are executing the compiler driver.
-     Compares with argv0 (not the actual path, as some driver installation may be symlinks)
-     and check if argv0 is driver_path or ends with '/' + driver_path.
-  */
-  argv0_len = strlen(argv[0]);
-  if (argv0_len >= driver_path_len &&
-      strcmp(driver_path, &argv[0][argv0_len-driver_path_len]) == 0 &&
-      (argv0_len == driver_path_len ||
-       argv[0][argv0_len-driver_path_len-1] == '/'))
-    {
-      OUTPUT("CC: ");
-      format_execve(u_path, argv, NULL, cwd_path);
-    }
-  return 0;
+	if (verbose) {
+		OUTPUT("VERB: execve: ");
+		format_execve(u_path, argv, NULL, cwd_path);
+	}
+	/* Check whether we are executing the compiler driver.
+	   Compares with argv0 (not the actual path, as some driver installation may be symlinks)
+	   and check if argv0 is driver_path or ends with '/' + driver_path.
+	*/
+	argv0_len = strlen(argv[0]);
+	if (argv0_len >= driver_path_len &&
+	    strcmp(driver_path, &argv[0][argv0_len-driver_path_len]) == 0 &&
+	    (argv0_len == driver_path_len ||
+	     argv[0][argv0_len-driver_path_len-1] == '/'))
+		{
+			OUTPUT("CC: ");
+			format_execve(u_path, argv, NULL, cwd_path);
+		}
+	return 0;
 }
 
 
@@ -155,13 +155,13 @@ static int process_execve(struct tracee_info *tracee)
  */
 static int addon_enter(struct tracee_info *tracee)
 {
-  if (!active) return 0;
-  int status = 0;
-  switch(tracee->sysnum) {
-  case PR_execve:
-    status = process_execve(tracee);
-  }
-  return status;
+	if (!active) return 0;
+	int status = 0;
+	switch(tracee->sysnum) {
+	case PR_execve:
+		status = process_execve(tracee);
+	}
+	return status;
 }
 
 
@@ -170,9 +170,9 @@ static int addon_enter(struct tracee_info *tracee)
  */
 static int addon_exit(struct tracee_info *tracee)
 {
-  if (!active) return 0;
+	if (!active) return 0;
   
-  return 0;
+	return 0;
 }
 
 
@@ -183,33 +183,33 @@ static struct addon_info addon = { &addon_enter, &addon_exit };
 
 static void __attribute__((constructor)) register_addon(void)
 {
-  syscall_addons_register(&addon);
-  active = getenv("PROOT_ADDON_CC_DEPS") != NULL;
-  verbose = getenv("PROOT_ADDON_CC_DEPS_VERBOSE") != NULL;
-  output = getenv("PROOT_ADDON_CC_DEPS_OUTPUT");
-  if (output == NULL || *output == '\0')
-    output = ":stderr";
-  driver_path = getenv("PROOT_ADDON_CC_DEPS_DRIVER");
-  if (driver_path == NULL)
-    driver_path = "gcc";
-  driver_path_len = strlen(driver_path);
-
-  /* Open output file.  */
-  if (strcmp(output, ":stdout") == 0)
-    output_file = stdout;
-  else if (strcmp(output, ":stderr") == 0)
-    output_file = stderr;
-  else {
-    const char *mode = "w";
-    if (*output == '+') {
-      mode = "a";
-      output++;
-    }
-    output_file = fopen(output, mode);
-    if (output_file == NULL) {
-      perror("error: cc_deps addon");
-      exit(1);
-    }
-    setlinebuf(output_file);
-  }
+	syscall_addons_register(&addon);
+	active = getenv("PROOT_ADDON_CC_DEPS") != NULL;
+	verbose = getenv("PROOT_ADDON_CC_DEPS_VERBOSE") != NULL;
+	output = getenv("PROOT_ADDON_CC_DEPS_OUTPUT");
+	if (output == NULL || *output == '\0')
+		output = ":stderr";
+	driver_path = getenv("PROOT_ADDON_CC_DEPS_DRIVER");
+	if (driver_path == NULL)
+		driver_path = "gcc";
+	driver_path_len = strlen(driver_path);
+  
+	/* Open output file.  */
+	if (strcmp(output, ":stdout") == 0)
+		output_file = stdout;
+	else if (strcmp(output, ":stderr") == 0)
+		output_file = stderr;
+	else {
+		const char *mode = "w";
+		if (*output == '+') {
+			mode = "a";
+			output++;
+		}
+		output_file = fopen(output, mode);
+		if (output_file == NULL) {
+			perror("error: cc_deps addon");
+			exit(1);
+		}
+		setlinebuf(output_file);
+	}
 }

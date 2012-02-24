@@ -41,12 +41,12 @@ struct addon_info *addons_list;
  */
 int syscall_addons_enter(struct tracee_info *tracee)
 {
-  int status = 0;
-  struct addon_info *current = addons_list;
-  for (current = addons_list; current != NULL && status >= 0; current = current->next)
-    if (current->enter != NULL)
-      status = (*current->enter)(tracee);
-  return status;
+	int status = 0;
+	struct addon_info *current = addons_list;
+	for (current = addons_list; current != NULL && status >= 0; current = current->next)
+		if (current->enter != NULL)
+			status = (*current->enter)(tracee);
+	return status;
 }
 
 
@@ -59,21 +59,21 @@ int syscall_addons_enter(struct tracee_info *tracee)
  */
 int syscall_addons_exit(struct tracee_info *tracee)
 {
-  int process_current_exit(struct addon_info *current)
-  {
-    int status = 0;
-    if (current->next != NULL)
-      status = process_current_exit(current->next);
-    if (status >= 0)
-      if (current->exit != NULL)
-  	status = (*current->exit)(tracee);
-    return status;
-  }
-  int status = 0;
-  struct addon_info *current = addons_list;
-  if (current != NULL)
-    status = process_current_exit(current);
-  return status;
+	int process_current_exit(struct addon_info *current)
+	{
+		int status = 0;
+		if (current->next != NULL)
+			status = process_current_exit(current->next);
+		if (status >= 0)
+			if (current->exit != NULL)
+				status = (*current->exit)(tracee);
+		return status;
+	}
+	int status = 0;
+	struct addon_info *current = addons_list;
+	if (current != NULL)
+		status = process_current_exit(current);
+	return status;
 }
 
 
@@ -82,14 +82,14 @@ int syscall_addons_exit(struct tracee_info *tracee)
  */
 void syscall_addons_register(struct addon_info *addon)
 {
-  struct addon_info **ptr_last = &addons_list;
-  struct addon_info *current;
-  for (current = addons_list; current != NULL && current != addon; current = current->next)
-    ptr_last = &current->next;
-  if (current != addon) {
-    addon->next = NULL;
-    *ptr_last = addon;
-  }
+	struct addon_info **ptr_last = &addons_list;
+	struct addon_info *current;
+	for (current = addons_list; current != NULL && current != addon; current = current->next)
+		ptr_last = &current->next;
+	if (current != addon) {
+		addon->next = NULL;
+		*ptr_last = addon;
+	}
 }
 
 /**
@@ -97,13 +97,13 @@ void syscall_addons_register(struct addon_info *addon)
  */
 void syscall_addons_unregister(struct addon_info *addon)
 {
-  struct addon_info **ptr_last = &addons_list;
-  struct addon_info *current;
-  for (current = addons_list; current != NULL && current != addon; current = current->next)
-    ptr_last = &current->next;
-  if (current == addon) {
-      *ptr_last = addon->next;
-      addon->next = NULL;
-  }
+	struct addon_info **ptr_last = &addons_list;
+	struct addon_info *current;
+	for (current = addons_list; current != NULL && current != addon; current = current->next)
+		ptr_last = &current->next;
+	if (current == addon) {
+		*ptr_last = addon->next;
+		addon->next = NULL;
+	}
 }
 

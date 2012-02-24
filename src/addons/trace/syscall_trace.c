@@ -49,13 +49,13 @@ static int verbose;
  */
 static int addon_enter(struct tracee_info *tracee)
 {
-  VERBOSE("pid %d: syscall(%ld, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx) [0x%lx]\n",
-	  tracee->pid, tracee->sysnum,
-	  peek_ureg(tracee, SYSARG_1), peek_ureg(tracee, SYSARG_2),
-	  peek_ureg(tracee, SYSARG_3), peek_ureg(tracee, SYSARG_4),
-	  peek_ureg(tracee, SYSARG_5), peek_ureg(tracee, SYSARG_6),
-	  peek_ureg(tracee, STACK_POINTER));
-  return 0;
+	VERBOSE("pid %d: syscall(%ld, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx) [0x%lx]\n",
+		tracee->pid, tracee->sysnum,
+		peek_ureg(tracee, SYSARG_1), peek_ureg(tracee, SYSARG_2),
+		peek_ureg(tracee, SYSARG_3), peek_ureg(tracee, SYSARG_4),
+		peek_ureg(tracee, SYSARG_5), peek_ureg(tracee, SYSARG_6),
+		peek_ureg(tracee, STACK_POINTER));
+	return 0;
 }
 
 
@@ -64,9 +64,9 @@ static int addon_enter(struct tracee_info *tracee)
  */
 static int addon_exit(struct tracee_info *tracee)
 {
-  VERBOSE("pid %d:        -> 0x%lx [0x%lx]\n", tracee->pid, 
-	  peek_ureg(tracee, SYSARG_RESULT), peek_ureg(tracee, STACK_POINTER));
-  return 0;
+	VERBOSE("pid %d:        -> 0x%lx [0x%lx]\n", tracee->pid, 
+		peek_ureg(tracee, SYSARG_RESULT), peek_ureg(tracee, STACK_POINTER));
+	return 0;
 }
 
 
@@ -77,6 +77,6 @@ static struct addon_info addon = { &addon_enter, &addon_exit };
 
 static void __attribute__((constructor)) register_addon(void)
 {
-  syscall_addons_register(&addon);
-  verbose = getenv("PROOT_ADDON_TRACE") != NULL;
+	syscall_addons_register(&addon);
+	verbose = getenv("PROOT_ADDON_TRACE") != NULL;
 }
