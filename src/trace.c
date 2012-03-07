@@ -43,6 +43,10 @@
 
 #include "compat.h"
 
+#ifdef ENABLE_ADDONS
+#include "addons/syscall_addons.h"
+#endif
+
 bool launch_process()
 {
 	long status;
@@ -181,7 +185,8 @@ int event_loop()
 						PTRACE_O_TRACEFORK    |
 						PTRACE_O_TRACEVFORK   |
 						PTRACE_O_TRACEEXEC    |
-						PTRACE_O_TRACECLONE);
+						PTRACE_O_TRACECLONE   |
+						PTRACE_O_TRACEEXIT);
 				if (status < 0)
 					notice(ERROR, SYSTEM, "ptrace(PTRACE_SETOPTIONS)");
 				/* Fall through. */
@@ -203,6 +208,12 @@ int event_loop()
 				signal = 0;
 				break;
 
+			case SIGTRAP | PTRACE_EVENT_EXIT  << 8:
+#ifdef ENABLE_ADDONS
+				syscall_addons_procexit(get_tracee_info(pid));
+#endif
+				signal = 0;
+				break;
 			case SIGSTOP:
 				/* Do not propagate SIGSTOP. 
 				   Actually man ptrace specifies that SIGSTOP passed as the

@@ -36,7 +36,6 @@ struct addon_info *addons_list;
  * Process the syscall before execution and after default proot processing
  * with optional addons.
  * Activated only if ENABLE_ADDONS is defined.
- * Actual processing should take place into addons/.../enter.c.
  * Return value is the status in case of addons error or bad arguments.
  */
 int syscall_addons_enter(struct tracee_info *tracee)
@@ -54,7 +53,6 @@ int syscall_addons_enter(struct tracee_info *tracee)
  * Process the syscall after execution and before default proot processing
  * with optional addons.
  * Activated only if ENABLE_ADDONS is defined.
- * Actual processing should take place into addons/.../exit.c.
  * Return value is the status in case of addons error.
  */
 int syscall_addons_exit(struct tracee_info *tracee)
@@ -73,6 +71,25 @@ int syscall_addons_exit(struct tracee_info *tracee)
 	struct addon_info *current = addons_list;
 	if (current != NULL)
 		status = process_current_exit(current);
+	return status;
+}
+
+
+/**
+ * Calls all registered addons procexit() function at tracee exit.
+ * Activated only if ENABLE_ADDONS is defined.
+ * A return value < 0 indicates failure of one of the addon to the
+ * caller.
+ * Also, if a procexit() addon function returns a status < 0
+ * other procexit addons are skipped.
+ */
+int syscall_addons_procexit(struct tracee_info *tracee)
+{
+	int status = 0;
+	struct addon_info *current = addons_list;
+	for (current = addons_list; current != NULL && status >= 0; current = current->next)
+		if (current->procexit != NULL)
+			status = (*current->procexit)(tracee);
 	return status;
 }
 
