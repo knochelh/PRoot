@@ -33,6 +33,7 @@
 #include <unistd.h> /* readlink (3p) */
 #include <regex.h> /* regcomp, regexec, regfree (3p) */
 #include <libgen.h> /* basename (3p) */
+#include <limits.h> /* PATH_MAX */
 #include "tracee/info.h"
 #include "tracee/ureg.h"
 #include "syscall/syscall.h"
