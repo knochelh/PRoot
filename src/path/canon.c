@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,8 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
 #include <sys/types.h> /* pid_t */
@@ -95,11 +93,16 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 			return status;
 		is_final = status;
 
-		if (strcmp(component, ".") == 0 && !is_final)
+		if (strcmp(component, ".") == 0) {
+			if (is_final)
+				is_final = FINAL_FORCE_DIR;
 			continue;
+		}
 
 		if (strcmp(component, "..") == 0) {
 			pop_component(result);
+			if (is_final)
+				is_final = FINAL_FORCE_DIR;
 			continue;
 		}
 
@@ -161,7 +164,7 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 
 		/* Remove the leading "root" part if needed, it's
 		 * useful for "/proc/self/cwd/" for instance. */
-		status = detranslate_path(tmp, 0);
+		status = detranslate_path(tmp, false, !belongs_to_guestfs(real_entry));
 		if (status < 0)
 			return status;
 

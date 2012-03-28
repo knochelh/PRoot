@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,8 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
 #include <stdbool.h> /* bool, true, false, */
@@ -75,9 +73,7 @@ void print_config()
 	if (config.kernel_release)
 		notice(INFO, USER, "kernel release = %s", config.kernel_release);
 
-	print_bool("ignore ELF interpreter", config.ignore_elf_interpreter);
 	print_bool("allow_unknown_syscalls", config.allow_unknown_syscalls);
-	print_bool("allow_ptrace", config.allow_ptrace);
 	print_bool("disable_aslr", config.disable_aslr);
 	print_bool("fake_id0", config.fake_id0);
 	print_bool("check_fd", config.check_fd);
@@ -86,15 +82,4 @@ void print_config()
 		notice(INFO, USER, "verbose level = %d", config.verbose_level);
 
 	print_bindings();
-}
-
-void sanitize_config()
-{
-	if (config.host_rootfs && !config.qemu) {
-		notice(WARNING, USER, "'-x' is meaningless without QEMU.");
-		config.host_rootfs = NULL;
-	}
-
-	if (config.host_rootfs && config.ignore_elf_interpreter)
-		notice(WARNING, USER, "'-e' might avoid the execution of host programs that relies on RPATH.");
 }

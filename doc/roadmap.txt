@@ -5,9 +5,32 @@
 Next minor
 ==========
 
-* Write a manual
+* Investigate why the Slackware package installer can't execute the
+  install-script::
 
-    * Explain why PRoot does not work with setuid programs
+      # installpkg perl-5.14.0-arm-2.tgz
+      ...
+      Executing install script for ...
+      sh: /proc/self/fd/0: No such file or directory
+
+* Fix the detranslation of "conflicting" host-side bindings.
+
+  The detranslation isn't a state machine yet, hence it doesn't know
+  how to detranslate correctly when there are several bindings with
+  the same host-side::
+
+      $ proot -w /a -m /tmp:/a -m /tmp:/b ../tests/rootfs /bin/pwd
+      /b
+
+      $ proot -w /a -m /tmp:/b -m /tmp:/a ../tests/rootfs /bin/pwd
+      /a
+
+* Make ``/proc/self/exe`` point to the original program name
+
+    That was the prupose of the field ``exe`` in the structure
+    ``tracee_info``
+
+* Handle /proc/<pid>/(exe|cwd) where <pid> is a process traced by PRoot (i.e not only "self").
 
 
 Next major
@@ -18,6 +41,13 @@ Next major
     * Remove the use of PATH_MAX and ARG_MAX
 
     * Remove most of string copy.
+
+* Use the mixed-mode mechanism to run QEMU (instead of trigger/LD_PRELOAD)
+
+* Allow one root per tracee, then add support for the chroot syscall
+  under PRoot.
+
+  It should make pacman (the Arch Linux package manager) happy.
 
 
 Not yet scheduled
@@ -35,18 +65,6 @@ Fixes
 
       guest$ cd /does_not_exist/etc
       sh: cd: /does_not_exist/etc: No such file or directory
-
-* Fix the detranslation of "conflicting" host-side bindings.
-
-  The detranslation isn't a state machine yet, hence it doesn't know
-  how to detranslate correctly when there are several bindings with
-  the same host-side::
-
-      $ proot -w /a -m /tmp:/a -m /tmp:/b ../tests/rootfs /bin/pwd
-      /b
-
-      $ proot -w /a -m /tmp:/b -m /tmp:/a ../tests/rootfs /bin/pwd
-      /a
 
 * Fix support for /proc/self when /proc isn't binded (but /proc/self is)
 
@@ -68,47 +86,15 @@ Features
     Rename push_env() in change_env() and enhance it to support the
     "unset" feature.
 
-* Check compatibility with the new version of ptrace (Linux 3.1+).
-
 * Distinguish the runner mode ``-r/-R`` and QEMU specific modes ``-q/-Q``
 
 * Add support for coalesced options, for instance ``proot -eM``
 
-* Make ``/proc/self/exe`` point to the original program name
-
-    That was the prupose of the field ``exe`` in the structure
-    ``tracee_info``
-
-* Handle /proc/<pid>/(exe|cwd) where <pid> is a process traced by PRoot (i.e not only "self").
-
 * Support guest ELF endianness different from the host one.
-
-* Emulate brk for programs that assume it's after the data segment.
-
-    Some heap managers (as found in Bash and Emacs) assume the program
-    break is right after *their* data segment but it's not the case
-    when the GNU dynamic loader is invoked directly, as in PRoot
-    without the -e option::
-
-      +---------------+
-      | program code  |
-      +---------------+ <- code end [static]
-      | program data  |
-      +---------------+ <- data end [static]
-      :               :
-      +---------------+
-      | loader code   |
-      +---------------+
-      | loader data   |
-      +---------------+
-      | loader heap   |
-      +---------------+ <- break [dynamic]
 
 * Be more accurate on reported errno (TLPI 564-565, 572).
 
 * Emulate ptrace() so as to allow a ptraced GDB on another ptraced process.
-
-* Write an real ELF loader instead of using the ELF interpreter as a launcher
 
 * Add two new options: --user-id & --group-id, and make -0 an alias to these options
 
@@ -117,8 +103,6 @@ Features
 
 Clean-up
 --------
-
-* Remove the call to init_module_...() functions, use sanitize_config instead.
 
 * in event_loop(), replace::
 
@@ -146,8 +130,6 @@ Clean-up
 
 * get_tracee_string should return -ENAMETOOLONG when length(XXX) >= max_size
 
-* Add a %check section in PRoot's specfile
-
 * Add a testcase for each command-line options
 
 * Add a test for bindinds that are prefixes of each other
@@ -173,6 +155,8 @@ Clean-up
 
 Misc.
 -----
+
+* Explain why PRoot does not work with setuid programs
 
 * Check (in ld.so sources) if more than one RPATH/RUNPATH entry is allowed.
 

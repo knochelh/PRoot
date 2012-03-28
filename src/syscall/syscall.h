@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,8 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
 #ifndef SYSCALL_H
@@ -59,5 +57,6 @@ enum sysarg {
 extern int translate_syscall(pid_t pid);
 extern int get_sysarg_path(struct tracee_info *tracee, char path[PATH_MAX], enum sysarg sysarg);
 extern int set_sysarg_path(struct tracee_info *tracee, char path[PATH_MAX], enum sysarg sysarg);
+extern int set_sysarg_data(struct tracee_info *tracee, void *tracer_ptr, word_t size, enum sysarg sysarg);
 
 #endif /* SYSCALL_H */

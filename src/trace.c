@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,9 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
- * Inspired by: strace.
  */
 
 #include <limits.h>     /* PATH_MAX, */
@@ -29,6 +26,8 @@
 #include <sys/types.h>  /* waitpid(2), */
 #include <sys/wait.h>   /* waitpid(2), */
 #include <sys/personality.h> /* personality(2), ADDR_NO_RANDOMIZE, */
+#include <sys/time.h>   /* *rlimit(2), */
+#include <sys/resource.h> /* *rlimit(2), */
 #include <fcntl.h>      /* AT_FDCWD, */
 #include <unistd.h>     /* fork(2), chdir(2), getpid(2), */
 #include <string.h>     /* strcpy(3), */
@@ -49,6 +48,7 @@
 
 bool launch_process()
 {
+	struct rlimit rlimit;
 	long status;
 	pid_t pid;
 
@@ -71,12 +71,59 @@ bool launch_process()
 		/* RHEL4 uses an ASLR mechanism that creates conflicts
 		 * between the layout of QEMU and the layout of the
 		 * target program. */
-		if (config.disable_aslr) {
-			status = personality(0xffffffff);
-			if (   status < 0
-			    || personality(status | ADDR_NO_RANDOMIZE) < 0)
-				notice(WARNING, INTERNAL, "can't disable ASLR");
+		status = personality(0xffffffff);
+		if (   status < 0
+		    || personality(status | ADDR_NO_RANDOMIZE) < 0)
+			notice(WARNING, INTERNAL, "can't disable ASLR");
+
+		/* 1. The ELF interpreter is explicitly used as a
+		 *    loader by PRoot, it means the Linux kernel
+		 *    allocates the heap segment for this loader, not
+		 *    for the application.  It isn't really a problem
+		 *    since the application re-uses the loader's heap
+		 *    transparently, i.e. its own brk points there.
+		 *
+		 * 2. When the current stack limit is set to a "high"
+		 *    value, the ELF interpreter is loaded to a "low"
+		 *    address, I guess it is the way the Linux kernel
+		 *    deals with this constraint.
+		 *
+		 * This two behaviors can be observed by running the
+		 * command "/usr/bin/cat /proc/self/maps", with/out
+		 * the ELF interpreter and with/out a high current
+		 * stack limit.
+		 *
+		 * When this two behaviors are combined, the dynamic
+		 * ELF linker might mmap a shared libraries to the
+		 * same address as the start of its heap if no heap
+		 * allocation was made prior this mmap.  This problem
+		 * was first observed with something similar to the
+		 * example below (because GNU make sets the current
+		 * limit to the maximum):
+		 *
+		 *     #!/usr/bin/make -f
+		 *
+		 *     SHELL=/lib64/ld-linux-x86-64.so.2 /usr/bin/bash
+		 *     FOO:=$(shell test -e /dev/null && echo OK)
+		 *
+		 *     all:
+		 *            @/usr/bin/test -n "$(FOO)"
+		 *
+		 * The code below is a workaround to this wrong
+		 * combination of behaviors, however it might create
+		 * conflict with tools that assume a "standard" stack
+		 * layout, like libgomp and QEMU.
+		 */
+		status = getrlimit(RLIMIT_STACK, &rlimit);
+		if (status >= 0 && rlimit.rlim_max == RLIM_INFINITY) {
+			/* "No one will need more than 256MB of stack memory" (tm).  */
+			rlimit.rlim_max = 256 * 1024 * 1024;
+			if (rlimit.rlim_cur > rlimit.rlim_max)
+				rlimit.rlim_cur = rlimit.rlim_max;
+			status = setrlimit(RLIMIT_STACK, &rlimit);
 		}
+		if (status < 0)
+			notice(WARNING, SYSTEM, "can't set the maximum stack size");
 
 		/* Synchronize with the tracer's event loop.  Without
 		 * this trick the tracer only sees the "return" from
@@ -234,7 +281,9 @@ int event_loop()
 				signal = 0;
 				break;
 			default:
-				/* Propagate all other signals. */
+				/* Propagate all signals but SIGSTOP. */
+				if (signal == SIGSTOP)
+					signal = 0;
 				break;
 			}
 		}

@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,8 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
 #include <string.h>    /* string(3), */
@@ -39,6 +37,7 @@
 #include "path/canon.h"
 #include "notice.h"
 #include "config.h"
+#include "build.h"
 
 #include "compat.h"
 
@@ -122,17 +121,15 @@ void pop_component(char *path)
 	}
 
 	/* Skip trailing path separators. */
-	while (path[offset] == '/')
+	while (offset > 1 && path[offset] == '/')
 		offset--;
 
 	/* Search for the previous path separator. */
-	while (path[offset] != '/')
+	while (offset > 1 && path[offset] != '/')
 		offset--;
 
-	/* Cut the end of the string before the last component.  Note
-	 * that the last path separator is kept (root or directory
-	 * sign).  */
-	path[offset+1] = '\0';
+	/* Cut the end of the string before the last component. */
+	path[offset] = '\0';
 	assert(path[0] == '/');
 }
 
@@ -282,7 +279,7 @@ int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd
 
 		/* Remove the leading "root" part of the base
 		 * (required!). */
-		status = detranslate_path(result, 1);
+		status = detranslate_path(result, true, true);
 		if (status < 0)
 			return status;
 	}
@@ -315,11 +312,11 @@ int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd
 		return status;
 
 	/* Small sanity check. */
-	if (deref_final != 0 && realpath(result, tmp) != NULL) {
-		if (strncmp(tmp, root, root_length) != 0) {
-			notice(WARNING, INTERNAL, "tracee %d is out of my control (2)", pid);
-			return -EPERM;
-		}
+	if (deref_final != 0
+	    && realpath(result, tmp) != NULL
+	    && !belongs_to_guestfs(tmp)) {
+		notice(WARNING, INTERNAL, "tracee %d is out of my control (2)", pid);
+		return -EPERM;
 	}
 
 end:
@@ -334,7 +331,7 @@ end:
  * including the end-of-string terminator.  On error it returns
  * -errno.
  */
-int detranslate_path(char path[PATH_MAX], int sanity_check)
+int detranslate_path(char path[PATH_MAX], bool sanity_check, bool follow_binding)
 {
 	size_t new_length;
 
@@ -349,18 +346,20 @@ int detranslate_path(char path[PATH_MAX], int sanity_check)
 	if (path[0] != '/')
 		return 0;
 
-	switch (substitute_binding(BINDING_REAL, path)) {
-	case 0:
-		return 0;
-	case 1:
-		return strlen(path) + 1;
-	default:
-		break;
+	if (follow_binding) {
+		switch (substitute_binding(BINDING_REAL, path)) {
+		case 0:
+			return 0;
+		case 1:
+			return strlen(path) + 1;
+		default:
+			break;
+		}
 	}
 
 	/* Ensure the path is within the new root. */
-	if (strncmp(path, root, root_length) != 0) {
-		if (sanity_check != 0)
+	if (!belongs_to_guestfs(path)) {
+		if (sanity_check)
 			return -EPERM;
 		else
 			return 0;
@@ -380,6 +379,17 @@ int detranslate_path(char path[PATH_MAX], int sanity_check)
 	}
 
 	return new_length + 1;
+}
+
+/**
+ * Check if the translated @t_path belongs to the guest rootfs, that
+ * is, isn't from a binding.
+ */
+bool belongs_to_guestfs(char *t_path)
+{
+	/* Works only with translated paths!  */
+	return (strncmp(root, t_path, root_length) == 0
+		&& (t_path[root_length] == '\0' || t_path[root_length] == '/'));
 }
 
 typedef int (*foreach_fd_t)(pid_t pid, int fd, char path[PATH_MAX]);
@@ -445,7 +455,7 @@ end:
 static int check_fd_callback(pid_t pid, int fd, char path[PATH_MAX])
 {
 	/* XXX TODO: don't warn for files that were open before the attach. */
-	if (strncmp(root, path, root_length) != 0) {
+	if (!belongs_to_guestfs(path)) {
 		notice(WARNING, INTERNAL, "tracee %d is out of my control (3)", pid);
 		notice(WARNING, INTERNAL, "\"%s\" is not inside the new root (\"%s\")", path, root);
 		return -pid;

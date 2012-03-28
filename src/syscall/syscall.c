@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,8 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
 #define _GNU_SOURCE      /* O_NOFOLLOW in fcntl.h, */
@@ -86,31 +84,30 @@ int get_sysarg_path(struct tracee_info *tracee, char path[PATH_MAX], enum sysarg
 }
 
 /**
- * Copy @path in the @tracee's memory address space pointed to by
- * the @sysarg argument of the current syscall.  This function returns
- * -errno if an error occured, otherwise it returns the size in bytes
- * "allocated" into the stack.
+ * Copy @size bytes of the data pointed to by @tracer_ptr to a
+ * @tracee's memory block allocated below its stack and make the
+ * @sysarg argument of the current syscall points to this new block.
+ * This function returns -errno if an error occured, otherwise it
+ * returns the size in bytes "allocated" into the stack.
  */
-int set_sysarg_path(struct tracee_info *tracee, char path[PATH_MAX], enum sysarg sysarg)
+int set_sysarg_data(struct tracee_info *tracee, void *tracer_ptr, word_t size, enum sysarg sysarg)
 {
 	word_t tracee_ptr;
 	int status;
-	int size;
 
-	/* Allocate space into the tracee's stack to host the new path. */
-	size = strlen(path) + 1;
+	/* Allocate space into the tracee's stack to host the new data. */
 	tracee_ptr = resize_tracee_stack(tracee, size);
 	if (tracee_ptr == 0)
 		return -EFAULT;
 
-	/* Copy the new path into the previously allocated space. */
-	status = copy_to_tracee(tracee, tracee_ptr, path, size);
+	/* Copy the new data into the previously allocated space. */
+	status = copy_to_tracee(tracee, tracee_ptr, tracer_ptr, size);
 	if (status < 0) {
 		(void) resize_tracee_stack(tracee, -size);
 		return status;
 	}
 
-	/* Make this argument point to the new path. */
+	/* Make this argument point to the new data. */
 	status = poke_ureg(tracee, sysarg, tracee_ptr);
 	if (status < 0) {
 		(void) resize_tracee_stack(tracee, -size);
@@ -118,6 +115,17 @@ int set_sysarg_path(struct tracee_info *tracee, char path[PATH_MAX], enum sysarg
 	}
 
 	return size;
+}
+
+/**
+ * Copy @path to a @tracee's memory block allocated below its stack
+ * and make the @sysarg argument of the current syscall points to this
+ * new block.  This function returns -errno if an error occured,
+ * otherwise it returns the size in bytes "allocated" into the stack.
+ */
+int set_sysarg_path(struct tracee_info *tracee, char path[PATH_MAX], enum sysarg sysarg)
+{
+	return set_sysarg_data(tracee, path, strlen(path) + 1, sysarg);
 }
 
 /**
@@ -163,13 +171,12 @@ static int translate_sysarg(struct tracee_info *tracee, enum sysarg sysarg, int 
 
 /**
  * Translate the input arguments of the syscall @tracee->sysnum in the
- * @tracee->pid process area. This function optionnaly sets
- * @tracee->output to the address of the output argument in the tracee's
- * memory space, it also sets @tracee->status to -errno if an error
- * occured from the tracee's perspective (EFAULT for instance),
- * otherwise to the amount of bytes "allocated" in the tracee's stack
- * for storing the newly translated paths. This function returns
- * -errno if an error occured from PRoot's perspective, otherwise 0.
+ * @tracee->pid process area. This function sets @tracee->status to
+ * -errno if an error occured from the tracee's perspective (EFAULT
+ * for instance), otherwise to the amount of bytes "allocated" in the
+ * tracee's stack for storing the newly translated paths. This
+ * function returns -errno if an error occured from PRoot's
+ * perspective, otherwise 0.
  */
 static int translate_syscall_enter(struct tracee_info *tracee)
 {
@@ -279,14 +286,13 @@ static int is_execve(struct tracee_info *tracee)
 }
 
 /**
- * Translate the output arguments of the syscall @tracee->sysnum in the
- * @tracee->pid process area. This function optionally detranslates the
- * path stored at @tracee->output in the tracee's memory space, it also
- * sets the result of this syscall to @tracee->status if an error
- * occured previously during the translation, that is, if
- * @tracee->status is less than 0, otherwise @tracee->status bytes of
- * the tracee's stack are "deallocated" to free the space used to store
- * the previously translated paths.
+ * Translate the output arguments of the syscall @tracee->sysnum in
+ * the @tracee->pid process area. This function sets the result of
+ * this syscall to @tracee->status if an error occured previously
+ * during the translation, that is, if @tracee->status is less than 0,
+ * otherwise @tracee->status bytes of the tracee's stack are
+ * "deallocated" to free the space used to store the previously
+ * translated paths.
  */
 static int translate_syscall_exit(struct tracee_info *tracee)
 {

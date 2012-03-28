@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,9 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
- * Inspired by: realpath() from the GNU C Library.
  */
 
 #include <sys/stat.h> /* lstat(2), */
@@ -80,7 +77,7 @@ static void insort_binding(struct binding *binding)
  * Save @path in the list of paths that are bound for the
  * translation mechanism.
  */
-void bind_path(const char *path, const char *location)
+void bind_path(const char *path, const char *location, bool must_exist)
 {
 	struct binding *binding;
 	const char *tmp;
@@ -92,7 +89,8 @@ void bind_path(const char *path, const char *location)
 	}
 
 	if (realpath(path, binding->real.path) == NULL) {
-		notice(WARNING, SYSTEM, "realpath(\"%s\")", path);
+		if (must_exist)
+			notice(WARNING, SYSTEM, "realpath(\"%s\")", path);
 		goto error;
 	}
 
@@ -196,7 +194,7 @@ int substitute_binding(int which, char path[PATH_MAX])
 			 *     proot -m /usr:/location /usr/local/slackware
 			 */
 			if (root_length != 0 /* rootfs != "/" */
-			    && strncmp(path, root, root_length) == 0)
+			    && belongs_to_guestfs(path))
 				continue;
 
 			/* Avoid an extra trailing '/' when in the
@@ -254,7 +252,7 @@ static void create_dummy(char c_path[PATH_MAX], const char * real_path)
 	const char *cursor;
 	int type;
 
-	/* Determine the type of the element to be binded:
+	/* Determine the type of the element to be bound:
 	   1: file
 	   0: directory
 	*/
@@ -322,8 +320,7 @@ static void create_dummy(char c_path[PATH_MAX], const char * real_path)
 	return;
 
 error:
-	notice(WARNING, USER, "can't create the binding location \"%s\": "
-	       "expect some troubles with programs that walk up to it", c_path);
+	notice(WARNING, USER, "can't create parent directories for \"%s\"", c_path);
 }
 
 /**
@@ -342,7 +339,12 @@ void init_bindings()
 		assert(!binding->sanitized);
 
 		strcpy(tmp, binding->location.path);
-		binding->location.path[0] = '\0';
+
+		/* In case binding->location.path is relative.  */
+		if (!getcwd(binding->location.path, PATH_MAX)) {
+			notice(WARNING, SYSTEM, "can't sanitize binding \"%s\"");
+			goto error;
+		}
 
 		/* Sanitize the location of the binding within the
 		   alternate rootfs since it is assumed by
@@ -360,6 +362,8 @@ void init_bindings()
 			goto error;
 		}
 
+		/* TODO: use a real path comparison function, for instance
+		 * strcmp(3) reports a wrong result with "/foo" and "/foo/."  */
 		binding->need_substitution = strcmp(binding->real.path, binding->location.path);
 		binding->location.length = strlen(binding->location.path);
 
@@ -375,7 +379,7 @@ void init_bindings()
 		continue;
 
 	error:
-		/* XXX TODO: remove this element from the list instead. */
+		/* TODO: remove this element from the list instead. */
 		binding->sanitized = 0;
 	}
 }

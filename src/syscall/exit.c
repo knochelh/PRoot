@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,15 +18,22 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
+/* This file is included by syscall.c, it can return two kinds of
+ * status code:
+ *
+ * - break: update the syscall result register with "status"
+ *
+ * - goto end: "status < 0" means the tracee is dead, otherwise do
+ *             nothing.
+ */
 switch (tracee->sysnum) {
 case PR_getcwd: {
 	char path[PATH_MAX];
 	size_t new_size;
 	size_t size;
+	word_t output;
 
 	result = peek_ureg(tracee, SYSARG_RESULT);
 	if (errno != 0) {
@@ -40,16 +47,20 @@ case PR_getcwd: {
 		goto end;
 	}
 
+	output = peek_ureg(tracee, SYSARG_1);
+	if (errno != 0) {
+		status = -errno;
+		goto end;
+	}
+
 	size = (size_t) peek_ureg(tracee, SYSARG_2);
 	if (errno != 0) {
 		status = -errno;
 		goto end;
 	}
 
-	if (size > PATH_MAX) {
-		status = -ENAMETOOLONG;
-		break;
-	}
+	if (size > PATH_MAX)
+		size = PATH_MAX;
 
 	if (size == 0) {
 		status = -EINVAL;
@@ -58,17 +69,16 @@ case PR_getcwd: {
 
 	/* The kernel does put the terminating NULL byte for
 	 * getcwd(2).  */
-	status = get_tracee_string(tracee, path, tracee->output, size);
+	status = get_tracee_string(tracee, path, output, size);
 	if (status < 0)
 		goto end;
 
-	/* No '\0' were found, that shouldn't happen...  */
 	if (status >= size) {
-		status = -ERANGE;
+		status = (size == PATH_MAX ? -ENAMETOOLONG : -ERANGE);
 		break;
 	}
 
-	status = detranslate_path(path, 1);
+	status = detranslate_path(path, true, true);
 	if (status < 0)
 		break;
 
@@ -79,12 +89,12 @@ case PR_getcwd: {
 
 	new_size = status;
 	if (new_size > size) {
-		status = -ERANGE;
+		status = (size == PATH_MAX ? -ENAMETOOLONG : -ERANGE);
 		break;
 	}
 
 	/* Overwrite the path.  */
-	status = copy_to_tracee(tracee, tracee->output, path, new_size);
+	status = copy_to_tracee(tracee, output, path, new_size);
 	if (status < 0)
 		goto end;
 
@@ -96,10 +106,13 @@ case PR_getcwd: {
 
 case PR_readlink:
 case PR_readlinkat: {
-	char path[PATH_MAX];
+	char pointee[PATH_MAX];
+	char pointer[PATH_MAX];
 	size_t old_size;
 	size_t new_size;
 	size_t max_size;
+	word_t input;
+	word_t output;
 
 	result = peek_ureg(tracee, SYSARG_RESULT);
 	if (errno != 0) {
@@ -115,16 +128,22 @@ case PR_readlinkat: {
 
 	old_size = result;
 
-	max_size = (size_t) peek_ureg(tracee, tracee->sysnum == PR_readlink ? SYSARG_3 : SYSARG_4);
+	output = peek_ureg(tracee, tracee->sysnum == PR_readlink
+				   ? SYSARG_2 : SYSARG_3);
 	if (errno != 0) {
 		status = -errno;
 		goto end;
 	}
 
-	if (max_size > PATH_MAX) {
-		status = -ENAMETOOLONG;
-		break;
+	max_size = (size_t) peek_ureg(tracee, tracee->sysnum == PR_readlink
+					      ? SYSARG_3 : SYSARG_4);
+	if (errno != 0) {
+		status = -errno;
+		goto end;
 	}
+
+	if (max_size > PATH_MAX)
+		max_size = PATH_MAX;
 
 	if (max_size == 0) {
 		status = -EINVAL;
@@ -133,12 +152,29 @@ case PR_readlinkat: {
 
 	/* The kernel does NOT put the terminating NULL byte for
 	 * getcwd(2).  */
-	status = copy_from_tracee(tracee, path, tracee->output, old_size);
+	status = copy_from_tracee(tracee, pointee, output, old_size);
 	if (status < 0)
 		goto end;
-	path[old_size] = '\0';
+	pointee[old_size] = '\0';
 
-	status = detranslate_path(path, 1);
+	input = peek_ureg(tracee, tracee->sysnum == PR_readlink
+			        ? SYSARG_1 : SYSARG_2);
+	if (errno != 0) {
+		status = -errno;
+		goto end;
+	}
+
+	/* Not optimal but safe (path is fully translated).  */
+	status = get_tracee_string(tracee, pointer, input, PATH_MAX);
+	if (status < 0)
+		goto end;
+
+	if (status >= PATH_MAX) {
+		status = -ENAMETOOLONG;
+		break;
+	}
+
+	status = detranslate_path(pointee, false, !belongs_to_guestfs(pointer));
 	if (status < 0)
 		break;
 
@@ -150,7 +186,7 @@ case PR_readlinkat: {
 	new_size = (status - 1 < max_size ? status - 1 : max_size);
 
 	/* Overwrite the path.  */
-	status = copy_to_tracee(tracee, tracee->output, path, new_size);
+	status = copy_to_tracee(tracee, output, pointee, new_size);
 	if (status < 0)
 		goto end;
 
@@ -160,42 +196,103 @@ case PR_readlinkat: {
 }
 	break;
 
-case PR_uname:
-	if (config.kernel_release) {
-		struct utsname utsname;
-		word_t release_addr;
-		size_t release_size;
+case PR_uname: {
+	struct utsname utsname;
+	word_t address;
+	size_t size;
 
-		result = peek_ureg(tracee, SYSARG_RESULT);
-		if (errno != 0) {
-			status = -errno;
-			goto end;
-		}
-		if ((int) result < 0) {
-			status = 0;
-			goto end;
-		}
+	bool change_uname;
 
-		result = peek_ureg(tracee, SYSARG_1);
-		if (errno != 0) {
-			status = -errno;
-			goto end;
-		}
+#if defined(ARCH_X86_64)
+	change_uname = config.kernel_release != NULL || tracee->uregs == uregs2;
+#else
+	change_uname = config.kernel_release != NULL;
+#endif
 
-		release_addr = result + offsetof(struct utsname, release);
-		release_size = sizeof(utsname.release);
-
-		status = get_tracee_string(tracee, &(utsname.release), release_addr, release_size);
-		if (status < 0)
-			goto end;
-
-		strncpy(utsname.release, config.kernel_release, release_size);
-		utsname.release[release_size - 1] = '\0';
-
-		status = copy_to_tracee(tracee, release_addr, &(utsname.release), strlen(utsname.release) + 1);
-		if (status < 0)
-			goto end;
+	if (!change_uname) {
+		/* Nothing to do.  */
+		status = 0;
+		goto end;
 	}
+
+	result = peek_ureg(tracee, SYSARG_RESULT);
+	if (errno != 0) {
+		status = -errno;
+		goto end;
+	}
+
+	/* Error reported by the kernel.  */
+	if ((int) result < 0) {
+		status = 0;
+		goto end;
+	}
+
+	address = peek_ureg(tracee, SYSARG_1);
+	if (errno != 0) {
+		status = -errno;
+		goto end;
+	}
+
+	status = copy_from_tracee(tracee, &utsname, address, sizeof(utsname));
+	if (status < 0)
+		goto end;
+
+	/*
+	 * Note: on x86_64, we can handle the two modes (32/64) with
+	 * the same code since struct utsname as always the same
+	 * layout.
+	 */
+
+	if (config.kernel_release) {
+		size = sizeof(utsname.release);
+
+		strncpy(utsname.release, config.kernel_release, size);
+		utsname.release[size - 1] = '\0';
+	}
+
+#if defined(ARCH_X86_64)
+	if (tracee->uregs == uregs2) {
+		size = sizeof(utsname.machine);
+
+		/* Some 32-bit programs like package managers can be
+		 * confused when the kernel reports "x86_64".  */
+		strncpy(utsname.machine, "i386", size);
+		utsname.machine[size - 1] = '\0';
+	}
+#endif
+
+	status = copy_to_tracee(tracee, address, &utsname, sizeof(utsname));
+	if (status < 0)
+		goto end;
+
+	status = 0;
+}
+	break;
+
+case PR_chown:
+case PR_fchown:
+case PR_lchown:
+case PR_chown32:
+case PR_fchown32:
+case PR_lchown32:
+case PR_fchownat:
+	if (!config.fake_id0) {
+		status = 0;
+		goto end;
+	}
+
+	result = peek_ureg(tracee, SYSARG_RESULT);
+	if (errno != 0) {
+		status = -errno;
+		goto end;
+	}
+
+	/* Override only permission errors.  */
+	if ((int) result != -EPERM) {
+		status = 0;
+		goto end;
+	}
+
 	status = 0;
 	break;
 

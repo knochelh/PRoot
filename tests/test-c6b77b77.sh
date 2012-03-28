@@ -1,5 +1,5 @@
-TMP=/tmp/`mcookie`
-rm -f ${ROOTFS}/${TMP}
-mkdir -p ${ROOTFS}/tmp
-cp ${ROOTFS}/bin/true ${ROOTFS}/${TMP}
-${PROOT} -e ${ROOTFS} ${TMP}
+if [ -z `which make` ]; then
+    exit 125;
+fi
+
+${PROOT} / make -f ${PWD}/test-c6b77b77.mk

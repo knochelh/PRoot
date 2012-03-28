@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,10 +18,9 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
+#define _GNU_SOURCE    /* get_current_dir_name(3), */
 #include <stdio.h>     /* printf(3), */
 #include <string.h>    /* string(3), */
 #include <stdlib.h>    /* exit(3), */
@@ -42,7 +41,7 @@
 
 struct config config;
 
-static void handle_option_b(char *value)
+static void new_binding(char *value, bool must_exist)
 {
 	char *ptr = strchr(value, ':');
 	if (ptr != NULL) {
@@ -54,7 +53,12 @@ static void handle_option_b(char *value)
 	if (value[0] == '$' && getenv(&value[1]))
 		value = getenv(&value[1]);
 
-	bind_path(value, ptr);
+	bind_path(value, ptr, must_exist);
+}
+
+static void handle_option_b(char *value)
+{
+	new_binding(value, true);
 }
 
 /**
@@ -65,15 +69,12 @@ static void handle_option_b(char *value)
 static char *which(char *const command)
 {
 	char *const argv[3] = { "which", command, NULL };
+	char which_output[PATH_MAX];
 	int pipe_fd[2];
 	char *path;
 	int status;
 	pid_t pid;
 
-	path = calloc(PATH_MAX, sizeof(char));
-	if (!path)
-		notice(ERROR, SYSTEM, "calloc()");
-		
 	status = pipe(pipe_fd);
 	if (status < 0)
 		notice(ERROR, SYSTEM, "pipe()");
@@ -98,13 +99,13 @@ static char *which(char *const command)
 	default: /* parent */
 		close(pipe_fd[1]); /* "write" end */
 
-		status = read(pipe_fd[0], path, PATH_MAX - 1);
+		status = read(pipe_fd[0], which_output, PATH_MAX - 1);
 		if (status < 0)
 			notice(ERROR, SYSTEM, "read()");
 		if (status == 0)
 			notice(ERROR, USER, "%s: command not found", command);
 		assert(status < PATH_MAX);
-		path[status - 1] = '\0'; /* overwrite "\n" */
+		which_output[status - 1] = '\0'; /* overwrite "\n" */
 
 		close(pipe_fd[0]); /* "read" end */
 
@@ -116,6 +117,10 @@ static char *which(char *const command)
 			notice(ERROR, USER, "`%s %s` returned an error", argv[0], command);
 		break;
 	}
+
+	path = realpath(which_output, NULL);
+	if (!path)
+		notice(ERROR, SYSTEM, "realpath()");
 
 	return path;
 }
@@ -178,12 +183,9 @@ static void handle_option_q(char *value)
 
 	config.qemu[0] = which(config.qemu[0]);
 	config.qemu[nb_args] = NULL;
-}
 
-static void handle_option_x(char *value)
-{
-	config.host_rootfs = value;
-	bind_path("/", config.host_rootfs);
+	config.host_rootfs = "/host-rootfs";
+	bind_path("/", config.host_rootfs, true);
 }
 
 static void handle_option_w(char *value)
@@ -191,24 +193,9 @@ static void handle_option_w(char *value)
 	config.initial_cwd = value;
 }
 
-static void handle_option_e(char *value)
-{
-	config.ignore_elf_interpreter = true;
-}
-
 static void handle_option_u(char *value)
 {
 	config.allow_unknown_syscalls = true;
-}
-
-static void handle_option_p(char *value)
-{
-	config.allow_ptrace = true;
-}
-
-static void handle_option_a(char *value)
-{
-	config.disable_aslr = true;
 }
 
 static void handle_option_k(char *value)
@@ -228,12 +215,11 @@ static void handle_option_v(char *value)
 
 static void handle_option_V(char *value)
 {
-	printf("PRoot %s: %s.\n", VERSION, SUBTITLE);
+	printf("PRoot %s: %s.\n", version, subtitle);
 #ifdef ADDONS
 	printf("Addons: %s\n", ADDONS);
 #endif
-	printf("Contact cedric.vincent@gmail.com for bug reports, suggestions, ...\n");
-	printf("Copyright (C) 2010, 2011 STMicroelectronics, licensed under GPL v2 or later.\n");
+	printf("%s\n", colophon);
 	exit(EXIT_FAILURE);
 }
 
@@ -248,29 +234,19 @@ static void handle_option_B(char *value)
 {
 	int i;
 	for (i = 0; recommended_bindings[i] != NULL; i++)
-		handle_option_b(recommended_bindings[i]);
+		new_binding(recommended_bindings[i], false);
 }
 
 static void handle_option_Q(char *value)
 {
 	handle_option_q(value);
-	handle_option_a(NULL);
 	handle_option_B(NULL);
-}
-
-static void handle_option_X(char *value)
-{
-	handle_option_Q(value);
-	handle_option_x("/host-rootfs");
 }
 
 static void handle_option_W(char *value)
 {
-	value = getenv("PWD");
-	if (!value)
-		value = ".";
-	handle_option_b(value);
-	handle_option_w(value);
+	handle_option_w(".");
+	handle_option_b(".");
 }
 
 #define NB_OPTIONS (sizeof(options) / sizeof(struct option))
@@ -285,13 +261,12 @@ static void print_usage(bool detailed)
 
 #define DETAIL(a) if (detailed) a
 
-	DETAIL(printf("PRoot %s: %s.\n", VERSION, SUBTITLE));
+	DETAIL(printf("PRoot %s: %s.\n", version, subtitle));
 #ifdef ADDONS
 	DETAIL(printf("Addons: %s\n", ADDONS));
 #endif
 	DETAIL(printf("\n"));
-
-	printf("Usage:\n  %s\n", SYNOPSIS);
+	printf("Usage:\n  %s\n", synopsis);
 	DETAIL(printf("\n"));
 
 	for (i = 0; i < NB_OPTIONS; i++) {
@@ -321,6 +296,9 @@ static void print_usage(bool detailed)
 				printf("\t");
 		}
 	}
+
+	if (detailed)
+		printf("%s\n", colophon);
 }
 
 static char *default_command[] = { "/bin/sh", NULL };
@@ -430,23 +408,18 @@ int main(int argc, char *argv[])
 	if (config.guest_rootfs == NULL)
 		notice(SYSTEM, ERROR, "realpath(\"%s\")", argv[i - 1]);
 
-	if (strcmp(config.guest_rootfs, "/") == 0)
-		config.ignore_elf_interpreter = true;
-
 	if (i < argc)
 		config.command = &argv[i];
 	else
 		config.command = default_command;
 
-	sanitize_config();
-
-	if (config.verbose_level)
-		print_config();
-
 	/* TODO: remove the need for initialization.  */
 	init_module_path();
 	init_module_tracee_info();
 	init_module_ldso();
+
+	if (config.verbose_level)
+		print_config();
 
 	status = pid
 		? attach_process(pid)

@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,9 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
- * Inspired by: execve(2) from the Linux kernel.
  */
 
 #include <sys/stat.h> /* lstat(2), S_ISREG(), */
@@ -98,14 +95,6 @@ static int expand_interp(struct tracee_info *tracee,
 	status = translate_n_check(tracee, t_interp, u_path);
 	if (status < 0)
 		return status;
-
-	/* Skip the extraction of the ELF interpreter on demand, in
-	 * this case we execute the translation of u_path (t_interp)
-	 * directly. */
-	if (callback == extract_elf_interp && config.ignore_elf_interpreter) {
-		strcpy(u_interp, u_path);
-		return 0;
-	}
 
 	/* Extract the interpreter of t_interp in u_interp + argument. */
 	status = callback(tracee, t_interp, u_interp, argument);
@@ -285,7 +274,7 @@ int translate_execve(struct tracee_info *tracee)
 			goto end;
 		argv_has_changed = argv_has_changed || (status > 0);
 
-		if (inhibit_rpath && !config.ignore_elf_interpreter) {
+		if (inhibit_rpath) {
 			/* Tell the dynamic linker to ignore RPATHs specified
 			 * in the *main* program.  To disable the RPATH
 			 * mechanism globally, we have to list all objects

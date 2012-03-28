@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,8 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
 #ifndef PATH_H
@@ -28,6 +26,7 @@
 #include <sys/types.h> /* pid_t, */
 #include <fcntl.h> /* AT_FDCWD, */
 #include <limits.h> /* PATH_MAX, */
+#include <stdbool.h>
 
 #include "tracee/info.h"
 
@@ -40,7 +39,8 @@
 
 extern void init_module_path();
 extern int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd, const char *fake_path, int deref_final);
-extern int detranslate_path(char path[PATH_MAX], int sanity_check);
+extern int detranslate_path(char path[PATH_MAX], bool sanity_check, bool follow_binding);
+extern bool belongs_to_guestfs(char *path);
 
 extern int join_paths(int number_paths, char result[PATH_MAX], ...);
 extern int next_component(char component[NAME_MAX], const char **cursor);

@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011 STMicroelectronics
+ * Copyright (C) 2010, 2011, 2012 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -18,8 +18,6 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
- *
- * Author: Cedric VINCENT (cedric.vincent@st.com)
  */
 
 #ifndef CONFIG_H
@@ -36,9 +34,7 @@ struct config {
 	char **qemu;
 	char **command;
 
-	bool ignore_elf_interpreter;
 	bool allow_unknown_syscalls;
-	bool allow_ptrace;
 	bool disable_aslr;
 	bool fake_id0;
 
@@ -50,6 +46,5 @@ struct config {
 extern struct config config;
 
 extern void print_config();
-extern void sanitize_config();
 
 #endif /* CONFIG_H */
