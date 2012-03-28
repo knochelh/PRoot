@@ -272,7 +272,8 @@ int translate_execve(struct tracee_info *tracee)
 		status = expand_interp(tracee, u_interp, t_interp, u_path /* dummy */, &argv, extract_elf_interp);
 		if (status < 0)
 			goto end;
-		argv_has_changed = argv_has_changed || (status > 0);
+		tracee->forced_elf_interpreter = (status > 0);
+		argv_has_changed = argv_has_changed || tracee->forced_elf_interpreter;
 
 		if (inhibit_rpath) {
 			/* Tell the dynamic linker to ignore RPATHs specified

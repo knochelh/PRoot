@@ -182,7 +182,8 @@ static int process_execve(struct tracee_info *tracee)
 	char **envp = NULL;
 	int status = 0;
 	int size = 0;
-  
+	int index;
+
 	status = get_sysarg_path(tracee, u_path, SYSARG_1);
 	if (status < 0)
 		goto end;
@@ -207,7 +208,13 @@ static int process_execve(struct tracee_info *tracee)
 	   Compares with argv0 (not the actual path, as some driver installation may be symlinks)
 	   and check if basename argv0 matches driver_re.
 	*/
-	if (regexec(&driver_re, basename(argv[0]), 0, NULL, 0) == 0) {
+	if (tracee->forced_elf_interpreter) {
+		index = 1;
+	} else {
+		index = 0;
+	}
+
+	if (regexec(&driver_re, basename(argv[index]), 0, NULL, 0) == 0) {
 		size = modify_execve(tracee, u_path, argv, envp, cwd_path);
 		if (size < 0) {
 			status = size;

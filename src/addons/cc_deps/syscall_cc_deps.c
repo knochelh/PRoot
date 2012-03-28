@@ -77,7 +77,7 @@ static int get_pid_cwd(int pid, char path[PATH_MAX])
 /**
  * Format execve.
  */
-static void format_execve(const char *path, char * const argv[], char * const envp[], const char *cwd)
+static void format_execve(const char *path, char * const argv[], char * const envp[], const char *cwd, int index)
 {
 	const char *arg;
 	const char *sep;
@@ -87,6 +87,8 @@ static void format_execve(const char *path, char * const argv[], char * const en
 	OUTPUT(": ");
 	if (argv != NULL) {
 		sep = "";
+		while (index--)
+			argv++;
 		while ((arg = *argv++) != NULL) {
 			OUTPUT("%s\"%s\"", sep, arg);
 			sep = ", ";
@@ -116,9 +118,11 @@ static int process_execve(struct tracee_info *tracee)
 {
 	char u_path[PATH_MAX];
 	char cwd_path[PATH_MAX];
+	char *prog_path;
 	char **argv = NULL;
 	int status;
-  
+	int index = 0;
+	
 	status = get_sysarg_path(tracee, u_path, SYSARG_1);
 	if (status < 0)
 		return status;
@@ -133,15 +137,22 @@ static int process_execve(struct tracee_info *tracee)
   
 	if (verbose) {
 		OUTPUT("VERB: execve: ");
-		format_execve(u_path, argv, NULL, cwd_path);
+		format_execve(u_path, argv, NULL, cwd_path, 0);
 	}
 	/* Check whether we are executing the compiler driver.
 	   Compares with argv0 (not the actual path, as some driver installation may be symlinks)
 	   and check if basename argv0 matches driver_re.
 	*/
-	if (regexec(&driver_re, basename(argv[0]), 0, NULL, 0) == 0) {
+	if (tracee->forced_elf_interpreter) {
+		index= 1;
+		prog_path = argv[index];
+	} else {
+		prog_path = u_path;
+	}
+
+	if (regexec(&driver_re, basename(argv[index]), 0, NULL, 0) == 0) {
 		OUTPUT("CC_DEPS: ");
-		format_execve(u_path, argv, NULL, cwd_path);
+		format_execve(prog_path, argv, NULL, cwd_path, index);
 	}
 	return 0;
 }

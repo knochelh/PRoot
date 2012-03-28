@@ -36,6 +36,7 @@ struct tracee_info {
 	char *trigger; /* Name of the file/directory used to start the path translation. */
 	off_t *uregs;  /* Current register bank, also used to know the current ABI. */
 	char *exe;     /* Path to the executable, à la /proc/self/exe. */
+	int forced_elf_interpreter; /* True if elf interpreter was added in argv array. */
 };
 
 typedef int (*foreach_tracee_t)(pid_t pid);
