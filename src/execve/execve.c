@@ -96,6 +96,14 @@ static int expand_interp(struct tracee_info *tracee,
 	if (status < 0)
 		return status;
 
+	/* Skip the extraction of the ELF interpreter on demand, in
+	 * this case we execute the translation of u_path (t_interp)
+	 * directly. */
+	if (callback == extract_elf_interp && config.ignore_elf_interpreter) {
+		strcpy(u_interp, u_path);
+		return 0;
+	}
+
 	/* Extract the interpreter of t_interp in u_interp + argument. */
 	status = callback(tracee, t_interp, u_interp, argument);
 	if (status < 0)
@@ -275,7 +283,7 @@ int translate_execve(struct tracee_info *tracee)
 		tracee->forced_elf_interpreter = (status > 0);
 		argv_has_changed = argv_has_changed || tracee->forced_elf_interpreter;
 
-		if (inhibit_rpath) {
+		if (inhibit_rpath && !config.ignore_elf_interpreter) {
 			/* Tell the dynamic linker to ignore RPATHs specified
 			 * in the *main* program.  To disable the RPATH
 			 * mechanism globally, we have to list all objects
