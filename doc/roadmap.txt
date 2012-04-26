@@ -5,20 +5,6 @@
 Next minor
 ==========
 
-* Make the de-translatation independant from the "bind-ness":
-
-      $ proot -b /:/host-rootfs -b /tmp /usr/local/slack/install/slackware-13.37-d1/
-
-      $ cd /usr
-      $ ln -s /usr/bin/as
-      $ ls -l as
-      lrwxrwxrwx 1 1000 users 11 Apr  4 10:40 as -> /usr/bin/as
-
-      $ cd /tmp
-      $ ln -s /usr/bin/as
-      $ ls -l as
-      lrwxrwxrwx 1 1000 users 11 Apr  4 10:40 as -> /host-rootfs/usr/bin/as
-
 * Investigate why the Slackware package installer can't execute the
   install-script::
 
@@ -41,7 +27,7 @@ Next minor
 
 * Make ``/proc/self/exe`` point to the original program name
 
-    That was the prupose of the field ``exe`` in the structure
+    That was the purpose of the field ``exe`` in the structure
     ``tracee_info``
 
 * Handle /proc/<pid>/(exe|cwd) where <pid> is a process traced by PRoot (i.e not only "self").
@@ -64,8 +50,6 @@ Next major
 
 * Allow one root per tracee, then add support for the chroot syscall
   under PRoot.
-
-  It should make pacman (the Arch Linux package manager) happy.
 
 
 Not yet scheduled
@@ -131,28 +115,6 @@ Documentation
 
 Clean-up
 --------
-
-* in event_loop(), replace::
-
-      while (get_nb_tracees() > 0) {
-          pid = waitpid(-1, &tracee_status, __WALL);
-          if (pid < 0)
-              notice(ERROR, SYSTEM, "waitpid()");
-          ...
-      }
-
-  with::
-
-      while (1) {
-          pid = waitpid(-1, &tracee_status, __WALL);
-          if (pid < 0)
-              if (errno != ECHILD)
-                  notice(ERROR, SYSTEM, "waitpid()");
-              else
-                  break;
-          ...
-      }
-      assert(get_nb_tracees() == 0)
 
 * Replace "readlink(XXX, path, PATH_MAX)" with "readlink(XXX, path, PATH_MAX - 1)"
 

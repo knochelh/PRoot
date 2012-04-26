@@ -41,7 +41,7 @@
 
 #include "compat.h"
 
-static int initialized = 0;
+static bool initialized = false;
 char root[PATH_MAX];
 size_t root_length;
 
@@ -195,11 +195,8 @@ void init_module_path()
 	assert(strlen(config.guest_rootfs) < PATH_MAX);
 	strcpy(root, config.guest_rootfs);
 
-	if (strcmp(root, "/") == 0)
-		root_length = 0;
-	else
-		root_length = strlen(root);
-	initialized = 1;
+	root_length = strlen(root);
+	initialized = true;
 
 	init_bindings();
 }
@@ -210,18 +207,18 @@ void init_module_path()
  * It is useful when using a runner that needs shared libraries or
  * reads some configuration files, for instance.
  */
-static int is_delayed(struct tracee_info *tracee, const char *path)
+static bool is_delayed(struct tracee_info *tracee, const char *path)
 {
 	if (tracee->trigger == NULL)
-		return 0;
+		return false;
 
-	if (strcmp(tracee->trigger, path) != 0)
-		return 1;
+	if (compare_paths(tracee->trigger, path) != PATHS_ARE_EQUAL)
+		return true;
 
 	free(tracee->trigger);
 	tracee->trigger = NULL;
 
-	return 0;
+	return false;
 }
 
 /**
@@ -238,7 +235,7 @@ int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd
 	int status;
 	pid_t pid;
 
-	assert(initialized != 0);
+	assert(initialized);
 
 	pid = (tracee != NULL ? tracee->pid : getpid());
 
@@ -279,7 +276,7 @@ int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd
 
 		/* Remove the leading "root" part of the base
 		 * (required!). */
-		status = detranslate_path(result, true, true);
+		status = detranslate_path(result, NULL);
 		if (status < 0)
 			return status;
 	}
@@ -303,7 +300,7 @@ int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd
 	/* Don't prepend the new root to the result of the
 	 * canonicalization if it is a binding, instead substitute the
 	 * binding location (leading part) with the real path.*/
-	if (substitute_binding(BINDING_LOCATION, result) >= 0)
+	if (substitute_binding(GUEST_SIDE, result) >= 0)
 		goto end;
 
 	strcpy(tmp, result);
@@ -331,11 +328,15 @@ end:
  * including the end-of-string terminator.  On error it returns
  * -errno.
  */
-int detranslate_path(char path[PATH_MAX], bool sanity_check, bool follow_binding)
+int detranslate_path(char path[PATH_MAX], char t_referrer[PATH_MAX])
 {
+	size_t prefix_length;
 	size_t new_length;
 
-	assert(initialized != 0);
+	bool sanity_check;
+	bool follow_binding;
+
+	assert(initialized);
 
 #if BENCHMARK_TRACEE_HANDLING
 	return 0;
@@ -346,8 +347,50 @@ int detranslate_path(char path[PATH_MAX], bool sanity_check, bool follow_binding
 	if (path[0] != '/')
 		return 0;
 
+	/* Is it a symlink?  */
+	if (t_referrer != NULL) {
+		enum path_comparison comparison;
+
+		sanity_check = false;
+		follow_binding = false;
+
+		/* In some cases bings have to be resolved.  */
+		comparison = compare_paths("/proc", t_referrer);
+		if (comparison == PATH1_IS_PREFIX) {
+			/* Always resolve bindings for symlinks in
+			 * "/proc", they always point to the emulated
+			 * file-system namespace by design. */
+			follow_binding = true;
+		}
+		else if (!belongs_to_guestfs(t_referrer)) {
+			const char *binding_referree;
+			const char *binding_referrer;
+
+			binding_referree = get_path_binding(HOST_SIDE, path);
+			binding_referrer = get_path_binding(HOST_SIDE, t_referrer);
+			assert(binding_referrer != NULL);
+
+			/* Resolve bindings for symlinks that belong
+			 * to a binding and point to the same binding.
+			 * For example, if "-b /lib:/foo" is specified
+			 * and the symlink "/lib/a -> /lib/b" exists
+			 * in the host rootfs namespace, then it
+			 * should appear as "/foo/a -> /foo/b" in the
+			 * guest rootfs namespace for consistency
+			 * reasons.  */
+			if (binding_referree != NULL) {
+				comparison = compare_paths(binding_referree, binding_referrer);
+				follow_binding = (comparison == PATHS_ARE_EQUAL);
+			}
+		}
+	}
+	else {
+		sanity_check = true;
+		follow_binding = true;
+	}
+
 	if (follow_binding) {
-		switch (substitute_binding(BINDING_REAL, path)) {
+		switch (substitute_binding(HOST_SIDE, path)) {
 		case 0:
 			return 0;
 		case 1:
@@ -357,25 +400,31 @@ int detranslate_path(char path[PATH_MAX], bool sanity_check, bool follow_binding
 		}
 	}
 
-	/* Ensure the path is within the new root. */
-	if (!belongs_to_guestfs(path)) {
+	switch (compare_paths2(root, root_length, path, strlen(path))) {
+	case PATH1_IS_PREFIX:
+		/* Remove the leading part, that is, the "root".  */
+
+		/* Special case when path to the guest rootfs == "/". */
+		prefix_length = (root_length == 1 ? 0 : root_length);
+
+		new_length = strlen(path) - prefix_length;
+		memmove(path, path + prefix_length, new_length);
+
+		path[new_length] = '\0';
+		break;
+
+	case PATHS_ARE_EQUAL:
+		/* Special case when path == root. */
+		new_length = 1;
+		strcpy(path, "/");
+		break;
+
+	default:
+		/* Ensure the path is within the new root.  */
 		if (sanity_check)
 			return -EPERM;
 		else
 			return 0;
-	}
-
-	/* Remove the leading part, that is, the "root". */
-	assert(strlen(path) >= root_length);
-	new_length = strlen(path) - root_length;
-	if (new_length != 0) {
-		memmove(path, path + root_length, new_length);
-		path[new_length] = '\0';
-	}
-	else {
-		/* Special case when path == root. */
-		new_length = 1;
-		strcpy(path, "/");
 	}
 
 	return new_length + 1;
@@ -387,9 +436,74 @@ int detranslate_path(char path[PATH_MAX], bool sanity_check, bool follow_binding
  */
 bool belongs_to_guestfs(char *t_path)
 {
-	/* Works only with translated paths!  */
-	return (strncmp(root, t_path, root_length) == 0
-		&& (t_path[root_length] == '\0' || t_path[root_length] == '/'));
+	enum path_comparison comparison;
+
+	comparison = compare_paths2(root, root_length, t_path, strlen(t_path));
+	return (comparison == PATHS_ARE_EQUAL || comparison == PATH1_IS_PREFIX);
+}
+
+/**
+ * Compare @path1 with @path2, which are respectively @length1 and
+ * @length2 long.
+ *
+ * This function works only with paths canonicalized in the same
+ * namespace (host/guest)!
+ */
+enum path_comparison compare_paths2(const char *path1, size_t length1,
+				const char *path2, size_t length2)
+{
+	size_t length_min;
+	bool is_prefix;
+	char sentinel;
+
+#if defined DEBUG_OPATH
+	assert(length(path1) == length1);
+	assert(length(path2) == length2);
+#endif
+
+	if (!length1 || !length2) {
+		return PATHS_ARE_NOT_COMPARABLE;
+	}
+
+	/* Remove potential trailing '/' for the comparison.  */
+	if (path1[length1 - 1] == '/')
+		length1--;
+
+	if (path2[length2 - 1] == '/')
+		length2--;
+
+	if (length1 < length2) {
+		length_min = length1;
+		sentinel = path2[length_min];
+	}
+	else {
+		length_min = length2;
+		sentinel = path1[length_min];
+	}
+
+	/* Optimize obvious cases.  */
+	if (sentinel != '/' && sentinel != '\0')
+		return PATHS_ARE_NOT_COMPARABLE;
+
+	is_prefix = (strncmp(path1, path2, length_min) == 0);
+
+	if (!is_prefix)
+		return PATHS_ARE_NOT_COMPARABLE;
+
+	if (length1 == length2)
+		return PATHS_ARE_EQUAL;
+	else if (length1 < length2)
+		return PATH1_IS_PREFIX;
+	else if (length1 > length2)
+		return PATH2_IS_PREFIX;
+
+	assert(0);
+	return PATHS_ARE_NOT_COMPARABLE;
+}
+
+enum path_comparison compare_paths(const char *path1, const char *path2)
+{
+	return compare_paths2(path1, strlen(path1), path2, strlen(path2));
 }
 
 typedef int (*foreach_fd_t)(pid_t pid, int fd, char path[PATH_MAX]);

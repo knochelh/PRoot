@@ -125,7 +125,7 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 		if (status < 0)
 			return status;
 
-		if (substitute_binding(BINDING_LOCATION, tmp) >= 0) {
+		if (substitute_binding(GUEST_SIDE, tmp) >= 0) {
 			strcpy(real_entry, tmp);
 		}
 		else {
@@ -164,7 +164,7 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 
 		/* Remove the leading "root" part if needed, it's
 		 * useful for "/proc/self/cwd/" for instance. */
-		status = detranslate_path(tmp, false, !belongs_to_guestfs(real_entry));
+		status = detranslate_path(tmp, real_entry);
 		if (status < 0)
 			return status;
 

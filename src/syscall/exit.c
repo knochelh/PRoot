@@ -78,7 +78,7 @@ case PR_getcwd: {
 		break;
 	}
 
-	status = detranslate_path(path, true, true);
+	status = detranslate_path(path, NULL);
 	if (status < 0)
 		break;
 
@@ -106,8 +106,8 @@ case PR_getcwd: {
 
 case PR_readlink:
 case PR_readlinkat: {
-	char pointee[PATH_MAX];
-	char pointer[PATH_MAX];
+	char referee[PATH_MAX];
+	char referer[PATH_MAX];
 	size_t old_size;
 	size_t new_size;
 	size_t max_size;
@@ -152,10 +152,10 @@ case PR_readlinkat: {
 
 	/* The kernel does NOT put the terminating NULL byte for
 	 * getcwd(2).  */
-	status = copy_from_tracee(tracee, pointee, output, old_size);
+	status = copy_from_tracee(tracee, referee, output, old_size);
 	if (status < 0)
 		goto end;
-	pointee[old_size] = '\0';
+	referee[old_size] = '\0';
 
 	input = peek_ureg(tracee, tracee->sysnum == PR_readlink
 			        ? SYSARG_1 : SYSARG_2);
@@ -165,7 +165,7 @@ case PR_readlinkat: {
 	}
 
 	/* Not optimal but safe (path is fully translated).  */
-	status = get_tracee_string(tracee, pointer, input, PATH_MAX);
+	status = get_tracee_string(tracee, referer, input, PATH_MAX);
 	if (status < 0)
 		goto end;
 
@@ -174,7 +174,7 @@ case PR_readlinkat: {
 		break;
 	}
 
-	status = detranslate_path(pointee, false, !belongs_to_guestfs(pointer));
+	status = detranslate_path(referee, referer);
 	if (status < 0)
 		break;
 
@@ -186,7 +186,7 @@ case PR_readlinkat: {
 	new_size = (status - 1 < max_size ? status - 1 : max_size);
 
 	/* Overwrite the path.  */
-	status = copy_to_tracee(tracee, output, pointee, new_size);
+	status = copy_to_tracee(tracee, output, referee, new_size);
 	if (status < 0)
 		goto end;
 
@@ -269,31 +269,47 @@ case PR_uname: {
 }
 	break;
 
-case PR_vfork:
-case PR_fork:
-case PR_clone:
+case PR_chroot: {
+	char path[PATH_MAX];
+	word_t input;
+
+	if (!config.fake_id0) {
+		status = 0;
+		goto end;
+	}
+
 	result = peek_ureg(tracee, SYSARG_RESULT);
 	if (errno != 0) {
 		status = -errno;
 		goto end;
 	}
 
-	/* Error reported by the kernel.  */
-	if ((int) result < 0) {
+	/* Override only permission errors.  */
+	if ((int) result != -EPERM) {
 		status = 0;
 		goto end;
 	}
 
-	/* Declare the child as soon as possible to avoid a
-	 * race-condition: if the last tracee forks then exits
-	 * *before* its child has made at least one syscall, then the
-	 * number of tracees might reach zero.  As a consequence PRoot
-	 * exists too, leaving this child process un-traced.  */
-	(void) get_tracee_info(result);
+	input = peek_ureg(tracee, SYSARG_1);
+	if (errno != 0) {
+		status = -errno;
+		goto end;
+	}
 
-	/* Nothing to report.  */
+	status = get_tracee_string(tracee, path, input, PATH_MAX);
+	if (status < 0)
+		goto end;
+
+	/* Succeed only if the new rootfs == current rootfs.  */
+	status = compare_paths2(root, root_length, path, strlen(path));
+	if (status != PATHS_ARE_EQUAL) {
+		status = 0;
+		goto end;
+	}
+
 	status = 0;
-	goto end;
+}
+	break;
 
 case PR_chown:
 case PR_fchown:
