@@ -120,20 +120,27 @@ static int process_execve(struct tracee_info *tracee)
 	char cwd_path[PATH_MAX];
 	char *prog_path;
 	char **argv = NULL;
+	char **envp = NULL;
 	int status;
+	int size = 0;
 	int index = 0;
+	int envp_changed = 0;
 	
 	status = get_sysarg_path(tracee, u_path, SYSARG_1);
 	if (status < 0)
-		return status;
+		goto end;
   
 	status = get_args(tracee, &argv, SYSARG_2);
 	if (status < 0)
-		return status;
+		goto end;
+
+	status = get_args(tracee, &envp, SYSARG_3);
+	if (status < 0)
+		goto end;
 
 	status = get_pid_cwd(tracee->pid, cwd_path);
 	if (status < 0)
-		return status;
+		goto end;
   
 	if (verbose) {
 		OUTPUT("VERB: execve: ");
@@ -151,10 +158,31 @@ static int process_execve(struct tracee_info *tracee)
 	}
 
 	if (regexec(&driver_re, basename(argv[index]), 0, NULL, 0) == 0) {
-		OUTPUT("CC_DEPS: ");
-		format_execve(prog_path, argv, NULL, cwd_path, index);
+		if (get_env_entry(envp, "PROOT_ADDON_CC_DEPS_ACTIVE") == NULL) {
+			OUTPUT("CC_DEPS: ");
+			format_execve(prog_path, argv, NULL, cwd_path, index);
+			status = new_env_entry(&envp, "PROOT_ADDON_CC_DEPS_ACTIVE", "1");
+			if (status < 0)
+				goto end;
+			envp_changed = 1;
+		}
 	}
-	return 0;
+	if (envp_changed) {
+		size = set_args(tracee, envp, SYSARG_3);
+		if (size < 0) {
+			status = size;
+			goto end;
+		}
+	}
+
+ end:
+	free_args(argv);
+	free_args(envp);
+	
+	if (status < 0)
+		return status;
+
+	return size;
 }
 
 
@@ -163,12 +191,15 @@ static int process_execve(struct tracee_info *tracee)
  */
 static int addon_enter(struct tracee_info *tracee)
 {
-	if (!active) return 0;
 	int status = 0;
+
+	if (!active) return 0;
+
 	switch(tracee->sysnum) {
 	case PR_execve:
 		status = process_execve(tracee);
 	}
+	
 	return status;
 }
 
