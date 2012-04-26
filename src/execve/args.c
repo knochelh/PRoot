@@ -66,6 +66,29 @@ int replace_env_entry(char **entry, const char *new_value)
 }
 
 /**
+ * Get the environment entry for the given variable @name.
+ * The returned value is a pointer to the variable definition
+ * string inside the given @envp array or NULL if undefined.
+ */
+char **get_env_entry(char *envp[], const char *name)
+{
+	int i;
+	int len;
+	assert(envp);
+	assert(name);
+
+	len = strlen(name);
+	for (i = 0; envp[i] != NULL; i++) {
+		if (strncmp(name, envp[i], len) == 0 &&
+		    envp[i][len] == '=')
+			break;
+	}
+	if (envp[i] == NULL)
+		return NULL;
+	return &envp[i];
+}
+
+/**
  * Add the new environment variable @name into @envp[] with the given
  * @value (do nothing if this latter is NULL).
  */
