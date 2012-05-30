@@ -122,15 +122,9 @@ struct tracee_info *new_tracee(pid_t pid)
 /**
  * Reset the entry in tracee_infos[] related to the tracee @pid.
  */
-void delete_tracee(pid_t pid)
+void delete_tracee(struct tracee_info *tracee)
 {
-	struct tracee_info *tracee;
-
 	nb_tracees--;
-
-	tracee = get_tracee_info(pid);
-	assert(tracee != NULL);
-
 	reset_tracee(tracee, true);
 }
 
@@ -146,7 +140,7 @@ size_t get_nb_tracees()
  * Search in the table tracee_infos[] for the entry related to the
  * tracee @pid.
  */
-struct tracee_info *get_tracee_info(pid_t pid)
+struct tracee_info *get_tracee_info(pid_t pid, bool create)
 {
 	size_t i;
 
@@ -154,6 +148,9 @@ struct tracee_info *get_tracee_info(pid_t pid)
 	for(i = 0; i < max_tracees; i++)
 		if (tracee_infos[i].pid == pid)
 			return &tracee_infos[i];
+
+	if (!create)
+		return NULL;
 
 	/* Create the tracee_infos[] entry dynamically. */
 	return new_tracee(pid);

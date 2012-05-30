@@ -51,6 +51,7 @@
 	      <li><a href="#examples">Examples</a></li>
 	      <li><a href="#downloads">Downloads</a></li>
 	      <li><a href="#help">Help</a></li>
+	      <li><a href="https://plus.google.com/107605112469213359575/posts">News+</a></li>
 	    </ul>
 	  </div>
 
@@ -67,8 +68,16 @@
 	    href="https://groups.google.com/forum/?fromgroups#!forum/proot_me">the
 	    forum</a>, but please be sure that your answer isn't in
 	    the <a
-	    href="https://github.com/cedric-vincent/PRoot/blob/master/doc/manual.txt">user
+	    href="https://github.com/cedric-vincent/PRoot#proot">user
 	    manual</a> first.
+	    </p>
+	    <p>Also, Rémi Duraffort has written interesting articles
+	    on <a
+	    href="http://ivoire.dinauz.org/blog/post/2012/04/16/PRoot-sorcery">how
+	    to use a foreign Debian rootfs with PRoot</a> in order to
+	    <a
+	    href="http://ivoire.dinauz.org/blog/post/2012/05/04/Making-VLC-at-home">build
+	    and test VLC on this guest Linux distribution</a>.
 	    </p>
 	  </div>
 

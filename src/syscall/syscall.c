@@ -379,9 +379,8 @@ end:
 	return status;
 }
 
-int translate_syscall(pid_t pid)
+int translate_syscall(struct tracee_info *tracee)
 {
-	struct tracee_info *tracee;
 	int status __attribute__ ((unused));
 
 #ifdef BENCHMARK_PTRACE
@@ -389,10 +388,6 @@ int translate_syscall(pid_t pid)
 	(void) ptrace(PTRACE_PEEKUSER, pid, uregs[STACK_POINTER], NULL);
 	return -errno;
 #endif
-
-	/* Get the information about this tracee. */
-	tracee = get_tracee_info(pid);
-	assert(tracee != NULL);
 
 #ifdef ARCH_X86_64
 	/* Check the current ABI. */

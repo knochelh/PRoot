@@ -33,6 +33,8 @@
 #include <string.h>     /* strcpy(3), */
 #include <errno.h>      /* errno(3), */
 #include <stdbool.h>    /* bool, true, false, */
+#include <assert.h>     /* assert(3), */
+#include <stdlib.h>     /* atexit(3), */
 
 #include "trace.h"
 #include "notice.h"
@@ -177,13 +179,90 @@ bool attach_process(pid_t pid)
 	return (tracee != NULL);
 }
 
+/* Send the KILL signal to all [known] tracees.  */
+static void kill_all_tracees()
+{
+	int kill_tracee(pid_t pid)
+	{
+		kill(pid, SIGKILL);
+		return 0;
+	}
+
+	foreach_tracee(kill_tracee);
+}
+
+static void kill_all_tracees2(int signum, siginfo_t *siginfo, void *ucontext)
+{
+	notice(WARNING, INTERNAL, "signal %d received from process %d", signum, siginfo->si_pid);
+	kill_all_tracees();
+
+	/* Exit immediately for system signals (segmentation fault,
+	 * illegal instruction, ...), otherwise exit cleanly through
+	 * the event loop.  */
+	if (signum != SIGQUIT)
+		_exit(EXIT_FAILURE);
+}
+
 int event_loop()
 {
+	struct sigaction signal_action;
+	struct tracee_info *tracee;
 	int last_exit_status = -1;
 	int tracee_status;
 	long status;
+	int signum;
 	int signal;
 	pid_t pid;
+
+	/* Kill all tracees when exiting.  */
+	status = atexit(kill_all_tracees);
+	if (status != 0)
+		notice(WARNING, INTERNAL, "atexit() failed");
+
+	/* All signals are blocked when the signal handler is called.
+	 * SIGINFO is used to know which process has signaled us and
+	 * RESTART is used to restart waitpid(2) seamlessly.  */
+	bzero(&signal_action, sizeof(signal_action));
+	signal_action.sa_flags = SA_SIGINFO | SA_RESTART;
+	status = sigfillset(&signal_action.sa_mask);
+	if (status < 0)
+		notice(WARNING, SYSTEM, "sigfillset()");
+
+	/* Handle all signals.  */
+	for (signum = 0; signum < SIGRTMAX; signum++) {
+		switch (signum) {
+		case SIGQUIT:
+		case SIGILL:
+		case SIGABRT:
+		case SIGFPE:
+		case SIGSEGV:
+			/* Kill all tracees on abnormal termination
+			 * signals.  This ensures no process is left
+			 * untraced.  */
+			signal_action.sa_sigaction = kill_all_tracees2;
+			break;
+
+		case SIGCHLD:
+		case SIGCONT:
+		case SIGSTOP:
+		case SIGTSTP:
+		case SIGTTIN:
+		case SIGTTOU:
+			/* The default action is OK for these signals,
+			 * they are related to tty and job control.  */
+			continue;
+
+		default:
+			/* Ignore all other signals, including
+			 * terminating ones (^C for instance). */
+			signal_action.sa_sigaction = (void *)SIG_IGN;
+			break;
+		}
+
+		status = sigaction(signum, &signal_action, NULL);
+		if (status < 0 && errno != EINVAL)
+			notice(WARNING, SYSTEM, "sigaction(%d)", signum);
+	}
 
 	signal = 0;
 	while (1) {
@@ -200,18 +279,22 @@ int event_loop()
 		if (config.check_fd)
 			foreach_tracee(check_fd);
 
+		/* Get the information about this tracee. */
+		tracee = get_tracee_info(pid, true);
+		assert(tracee != NULL);
+
 		if (WIFEXITED(tracee_status)) {
 			VERBOSE(1, "pid %d: exited with status %d",
 			           pid, WEXITSTATUS(tracee_status));
 			last_exit_status = WEXITSTATUS(tracee_status);
-			delete_tracee(pid);
+			delete_tracee(tracee);
 			continue; /* Skip the call to ptrace(SYSCALL). */
 		}
 		else if (WIFSIGNALED(tracee_status)) {
 			VERBOSE(get_nb_tracees() != 1,
 				"pid %d: terminated with signal %d",
 				pid, WTERMSIG(tracee_status));
-			delete_tracee(pid);
+			delete_tracee(tracee);
 			continue; /* Skip the call to ptrace(SYSCALL). */
 		}
 		else if (WIFCONTINUED(tracee_status)) {
@@ -220,18 +303,28 @@ int event_loop()
 		}
 		else if (WIFSTOPPED(tracee_status)) {
 
-			/* Don't WSTOPSIG() to extract the signal
+			/* Don't use WSTOPSIG() to extract the signal
 			 * since it clears the PTRACE_EVENT_* bits. */
 			signal = (tracee_status & 0xfff00) >> 8;
 
 			switch (signal) {
+				static bool skip_bare_sigtrap = false;
+
 			case SIGTRAP:
 				/* Distinguish some events from others and
 				 * automatically trace each new process with
-				 * the same options.  Note: only the first
-				 * process should come here (because of
-				 * TRACE*FORK/CLONE/EXEC). */
-				status = ptrace(PTRACE_SETOPTIONS, pid, NULL,
+				 * the same options.
+				 *
+				 * Note that only the first bare SIGTRAP is
+				 * related to the tracing loop, others SIGTRAP
+				 * carry tracing information because of
+				 * TRACE*FORK/CLONE/EXEC.
+				 */
+				if (skip_bare_sigtrap)
+					break;
+				skip_bare_sigtrap = true;
+
+				status = ptrace(PTRACE_SETOPTIONS, tracee->pid, NULL,
 						PTRACE_O_TRACESYSGOOD |
 						PTRACE_O_TRACEFORK    |
 						PTRACE_O_TRACEVFORK   |
@@ -242,10 +335,10 @@ int event_loop()
 					notice(ERROR, SYSTEM, "ptrace(PTRACE_SETOPTIONS)");
 				/* Fall through. */
 			case SIGTRAP | 0x80:
-				status = translate_syscall(pid);
+				status = translate_syscall(tracee);
 				if (status < 0) {
 					/* The process died in a syscall. */
-					delete_tracee(pid);
+					delete_tracee(tracee);
 					continue; /* Skip the call to ptrace(SYSCALL). */
 				}
 				signal = 0;
@@ -266,28 +359,14 @@ int event_loop()
 				signal = 0;
 				break;
 			case SIGSTOP:
-				/* Do not propagate SIGSTOP. 
-				   Actually man ptrace specifies that SIGSTOP passed as the
-				   data argument to PTRACE_SYSCALL is not delivered, but this
-				   feature is not honored (or maybe it is undocumented that
-				   using TRACESYSGOOD has the effect of changing this policy).
-				   Anyway, as the SIGSTOP signal is launched at each new
-				   process creation (ref to launch_process()), the effect of
-				   propagating this signal is that the child process is
-				   stopped/continued twice at each new process creation.
-				   On some systems this also has the effect of outputing to
-				   the tty a SIGSTOP event notification for the child process,
-				   which is not expected.
-				   It is an opened question whether we should ignore SIGSTOP,
-				   as done there, or if there can be an alternative to 
-				   the SIGSTOP trick in launch_process().
-				*/
-				signal = 0;
-				break;
-			default:
-				/* Propagate all signals but SIGSTOP. */
-				if (signal == SIGSTOP)
+				/* For each tracee, the first SIGSTOP
+				 * is only used to notify the tracer.  */
+				if (!tracee->allow_sigstop)
 					signal = 0;
+				tracee->allow_sigstop = true;
+				break;
+
+			default:
 				break;
 			}
 		}
@@ -298,11 +377,11 @@ int event_loop()
 
 		/* Restart the tracee and stop it at the next entry or
 		 * exit of a system call. */
-		status = ptrace(PTRACE_SYSCALL, pid, NULL, signal);
+		status = ptrace(PTRACE_SYSCALL, tracee->pid, NULL, signal);
 		if (status < 0) {
 			 /* The process died in a syscall.  */
 			notice(WARNING, SYSTEM, "ptrace(SYSCALL)");
-			delete_tracee(pid);
+			delete_tracee(tracee);
 		}
 	}
 

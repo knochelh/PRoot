@@ -78,6 +78,10 @@ h3 tt {
     padding-bottom: 0.5em;
 }
 
+#contents ul {
+    margin: 0;
+}
+
 #contents li {
     display: inline;
 
@@ -143,6 +147,10 @@ pre {
     font-family: monospace;
 
     white-space: pre-wrap;
+
+    border-style: solid;
+    border-width: 1px;
+    border-color: gray;
 
     border-radius: 0.5em;
     -moz-border-radius: 0.5em;
