@@ -12,6 +12,50 @@ CPPFLAGS = -I. -I$(VPATH)
 CFLAGS   = -Wall -O0 -g
 LDFLAGS  = 
 
+ifdef LIMITED_USE
+# For limited use and MIT license
+STATIC_BUILD=1
+LICENSE_MIT=1
+DAYS_LIMIT=30
+STRIP_INSTALL=1
+endif
+
+ifdef LICENSE_MIT
+CFLAGS  += -DLICENSE_MIT
+endif
+
+ifdef DAYS_LIMIT
+STATIC_BUILD=1
+TIME_NOW := $(shell date +%s)
+TIME_LIMIT:= $(shell date -d"$(DAYS_LIMIT) days" +%s)
+DATE_LIMIT:= $(shell date -d"@$(TIME_LIMIT)" -u +"%Y-%m-%dUTC")
+CFLAGS   += -DDAYS_LIMIT=$(DAYS_LIMIT) -DDATE_LIMIT=$(DATE_LIMIT) -DTIME_NOW=$(TIME_NOW) -DTIME_LIMIT=$(TIME_LIMIT)
+endif
+
+ifdef STRIP_INSTALL
+INSTALL=install -s
+endif
+
+ifdef STATIC_BUILD
+LDFLAGS  += -static
+endif
+
+ifdef ENABLE_ADDONS
+# For care addon
+ENABLE_GLIB=1
+endif
+
+ifdef ENABLE_GLIB
+GLIB_CFLAGS := $(shell pkg-config glib-2.0 --cflags)
+ifdef STATIC_BUILD
+GLIB_LIBS := $(shell pkg-config glib-2.0 --libs --static)
+else
+GLIB_LIBS := $(shell pkg-config glib-2.0 --libs)
+endif
+CFLAGS  += $(GLIB_CFLAGS)
+LIBS    += $(GLIB_LIBS)
+endif
+
 OBJECTS = cli.o			\
 	config.o		\
 	notice.o		\
@@ -96,7 +140,7 @@ build.h: .check_readlinkat
 
 SRC     = $(dir $(firstword $(MAKEFILE_LIST)))
 COMPILE = $($(quiet)CC) $(CPPFLAGS) $(CFLAGS) -MD -c $(SRC)$*.c -o $@
-LINK    = $($(quiet)LD) $(LDFLAGS) -o $@ $^
+LINK    = $($(quiet)LD) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 proot: $(OBJECTS)
 	$(LINK)

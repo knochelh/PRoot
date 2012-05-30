@@ -354,7 +354,7 @@ int event_loop()
 
 			case SIGTRAP | PTRACE_EVENT_EXIT  << 8:
 #ifdef ENABLE_ADDONS
-				syscall_addons_procexit(get_tracee_info(pid));
+				syscall_addons_procexit(get_tracee_info(pid, false));
 #endif
 				signal = 0;
 				break;

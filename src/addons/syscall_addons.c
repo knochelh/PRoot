@@ -95,6 +95,21 @@ int syscall_addons_procexit(struct tracee_info *tracee)
 
 
 /**
+ * Process the syscall before execution of canonicalization.
+ * Activated only if ENABLE_ADDONS is defined.
+ * Return value is the status in case of addons error or bad arguments.
+ */
+int syscall_addons_canon_host_enter(struct tracee_info *tracee, char *real_path)
+{
+	int status = 0;
+	struct addon_info *current = addons_list;
+	for (current = addons_list; current != NULL && status >= 0; current = current->next)
+		if (current->canon_host_enter != NULL)
+		  status = (*current->canon_host_enter)(tracee, real_path);
+	return status;
+}
+
+/**
  * Register a new addon into the processing list.
  */
 void syscall_addons_register(struct addon_info *addon)

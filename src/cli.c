@@ -28,6 +28,9 @@
 #include <assert.h>    /* assert(3), */
 #include <unistd.h>    /* acess(2), pipe(2), dup2(2), */
 #include <sys/wait.h>  /* wait(2), */
+#ifdef DAYS_LIMIT
+#include <time.h>      /* time(2). */
+#endif
 
 #include "cli.h"
 #include "config.h"
@@ -321,6 +324,18 @@ static void error_separator(struct argument *argument)
 		argument->separator);
 }
 
+#ifdef DAYS_LIMIT
+static void check_expiration()
+{
+	if (time(NULL) > TIME_LIMIT) {
+		printf("%s\n", colophon);
+		printf("The expiration date for this limited usage software has expired.");
+		exit(EXIT_FAILURE);
+	}
+
+}
+#endif
+
 int main(int argc, char *argv[])
 {
 	option_handler_t handler = NULL;
@@ -328,6 +343,9 @@ int main(int argc, char *argv[])
 	int status;
 	pid_t pid = 0;
 
+#ifdef DAYS_LIMIT
+	check_expiration();
+#endif
 	if (argc == 1) {
 		print_usage(false);
 		exit(EXIT_FAILURE);

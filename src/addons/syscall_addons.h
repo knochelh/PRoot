@@ -40,6 +40,7 @@ struct addon_info {
 	int (*enter)(struct tracee_info *tracee);
 	int (*exit)(struct tracee_info *tracee);
 	int (*procexit)(struct tracee_info *tracee);
+	int (*canon_host_enter)(struct tracee_info *tracee, char *real_path);
 	struct addon_info *next;
 };
 
@@ -63,6 +64,19 @@ int syscall_addons_exit(struct tracee_info *tracee);
  * A return value < 0 indicates failure of one of the addons.
  */
 int syscall_addons_procexit(struct tracee_info *tracee);
+
+/**
+ * Called on exit of tracee process.
+ * Each registered addon procexit function is executed in order or registration.
+ * A return value < 0 indicates failure of one of the addons.
+ */
+int syscall_addons_procexit(struct tracee_info *tracee);
+
+/**
+ * Called on canonicalization entry.
+ * Each registered addon is called.
+ */
+int syscall_addons_canon_host_enter(struct tracee_info *tracee, char *real_path);
 
 /**
  * Register a new addon to the processing list.

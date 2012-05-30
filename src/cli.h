@@ -27,8 +27,22 @@ struct option {
 static const char *version = VERSION;
 static const char *subtitle = "chroot, mount --bind, and binfmt_misc without privilege/setup";
 static const char *synopsis = "proot [option] ... /path/to/guest/rootfs [program [arg] ...]";
-static const char *colophon = "Visit http://proot.me for help, bug reports, suggestions, patchs, ...\n\
-Copyright (C) 2012 STMicroelectronics, licensed under GPL v2 or later.";
+static const char *colophon =
+#ifdef LICENSE_MIT
+  "Copyright (C) 2012 STMicroelectronics, licensed under The MIT License.\n"
+#else
+  "Copyright (C) 2012 STMicroelectronics, licensed under GPL v2 or later.\n"
+#endif
+#ifdef DAYS_LIMIT
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
+  "This software is provided for a limited period of " STRINGIFY(DAYS_LIMIT) " days "
+  "(will expire on " STRINGIFY(DATE_LIMIT) ")\n"
+  "Visit http://proot.me for the official PRoot distribution.\n"
+#else
+  "Visit http://proot.me for help, bug reports, suggestions, patchs, ...\n"
+#endif
+  "";
 
 static char *recommended_bindings[] = {
 	"/etc/host.conf",

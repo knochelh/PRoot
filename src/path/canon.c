@@ -34,6 +34,10 @@
 #include "path/path.h"
 #include "path/binding.h"
 
+#ifdef ENABLE_ADDONS
+#include "addons/syscall_addons.h"
+#endif
+
 /**
  * Copy in @result the canonicalization (see `man 3 realpath`) of
  * @fake_path regarding to @root. The path to canonicalize could be
@@ -134,6 +138,14 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 				return status;
 		}
 
+#ifdef ENABLE_ADDONS
+		status = syscall_addons_canon_host_enter(get_tracee_info(pid, false), real_entry);
+		if (status < 0)
+			return status;
+#endif
+#if 0
+		notify_all_plugins(CANON_HOST_ENTRY, tracee, (intptr_t)real_entry);
+#endif
 		status = lstat(real_entry, &statl);
 
 		/* Nothing special to do if it's not a link or if we
