@@ -64,8 +64,12 @@ case PR_exit_group:
 case PR_fadvise64:
 case PR_fadvise64_64:
 case PR_fallocate:
+#ifdef PR_fanotify_init
 case PR_fanotify_init:
+#endif
+#ifdef PR_fanotify_mark
 case PR_fanotify_mark:
+#endif
 case PR_fchdir:
 case PR_fchmod:
 case PR_fchown:
@@ -198,7 +202,9 @@ case PR_ppoll:
 case PR_prctl:
 case PR_pread64:
 case PR_preadv:
+#ifdef PR_prlimit64
 case PR_prlimit64:
+#endif
 case PR_prof:
 case PR_profil:
 case PR_pselect6:
