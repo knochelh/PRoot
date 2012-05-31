@@ -2,7 +2,7 @@
 #     make -f ${SOMEWHERE}/proot/src/GNUmakefile
 
 # the VPATH variable must points to the actual makefile directory
-MAKEDIR := $(dir $(lastword $(MAKEFILE_LIST)))
+MAKEDIR := $(dir $(MAKEFILE_LIST))
 VPATH	:= $(MAKEDIR)
 GIT      = git
 RM       = rm
