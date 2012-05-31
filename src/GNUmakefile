@@ -12,6 +12,7 @@ LD       = $(CC)
 CPPFLAGS = -I. -I$(VPATH)
 CFLAGS   = -Wall -O0 -g
 LDFLAGS  = 
+LIBS     =
 
 ifdef LIMITED_USE
 # For limited use and MIT license
@@ -22,15 +23,15 @@ STRIP_INSTALL=1
 endif
 
 ifdef LICENSE_MIT
-CFLAGS  += -DLICENSE_MIT
+I_CPPFLAGS  += -DLICENSE_MIT
 endif
 
 ifdef DAYS_LIMIT
 STATIC_BUILD=1
 TIME_NOW := $(shell date +%s)
 TIME_LIMIT:= $(shell date -d"$(DAYS_LIMIT) days" +%s)
-DATE_LIMIT:= $(shell date -d"@$(TIME_LIMIT)" -u +"%Y-%m-%dUTC")
-CFLAGS   += -DDAYS_LIMIT=$(DAYS_LIMIT) -DDATE_LIMIT=$(DATE_LIMIT) -DTIME_NOW=$(TIME_NOW) -DTIME_LIMIT=$(TIME_LIMIT)
+DATE_LIMIT:= $(shell date -d"$(DAYS_LIMIT) days" -u +"%Y-%m-%dUTC")
+I_CPPFLAGS   += -DDAYS_LIMIT=$(DAYS_LIMIT) -DDATE_LIMIT=$(DATE_LIMIT) -DTIME_NOW=$(TIME_NOW) -DTIME_LIMIT=$(TIME_LIMIT)
 endif
 
 ifdef STRIP_INSTALL
@@ -38,23 +39,12 @@ INSTALL=install -s
 endif
 
 ifdef STATIC_BUILD
-LDFLAGS  += -static
+I_LDFLAGS  += -static
 endif
 
 ifdef ENABLE_ADDONS
 # For care addon
-ENABLE_GLIB=1
-endif
-
-ifdef ENABLE_GLIB
-GLIB_CFLAGS := $(shell pkg-config glib-2.0 --cflags)
-ifdef STATIC_BUILD
-GLIB_LIBS := $(shell pkg-config glib-2.0 --libs --static)
-else
-GLIB_LIBS := $(shell pkg-config glib-2.0 --libs)
-endif
-CFLAGS  += $(GLIB_CFLAGS)
-LIBS    += $(GLIB_LIBS)
+ENABLE_CEC_LIB=1
 endif
 
 OBJECTS = cli.o			\
@@ -74,10 +64,17 @@ OBJECTS = cli.o			\
 	tracee/mem.o		\
 	tracee/ureg.o
 
+
+ifdef ENABLE_CEC_LIB
+I_CPPFLAGS  += -I$(VPATH)/cec_lib
+OBJECTS += cec_lib/cec_hash.o
+endif
+
+
 # The ENABLE_ADDONS must be a space separated list of addons
-ifneq ($(ENABLE_ADDONS),)
+ifdef ENABLE_ADDONS
 OBJECTS += addons/syscall_addons.o
-CPPFLAGS += -DENABLE_ADDONS
+I_CPPFLAGS += -DENABLE_ADDONS
 OBJECTS += $(subst $(MAKEDIR)/,,$(subst .c,.o,$(wildcard $(addsuffix /*.c, $(addprefix $(MAKEDIR)/addons/, $(ENABLE_ADDONS))))))
 endif
 
@@ -140,8 +137,8 @@ build.h: .check_readlinkat
 # Build rules
 
 SRC     = $(dir $(firstword $(MAKEFILE_LIST)))
-COMPILE = $($(quiet)CC) $(CPPFLAGS) $(CFLAGS) -MD -c $(SRC)$*.c -o $@
-LINK    = $($(quiet)LD) $(LDFLAGS) -o $@ $^ $(LIBS)
+COMPILE = $($(quiet)CC) $(CPPFLAGS) $(I_CPPFLAGS) $(CFLAGS) $(I_CFLAGS) -MD -c $(SRC)$*.c -o $@
+LINK    = $($(quiet)LD) $(LDFLAGS) $(I_LDFLAGS) -o $@ $^ $(LIBS)
 
 proot: $(OBJECTS)
 	$(LINK)

@@ -23,25 +23,26 @@
  *         Christophe Guillon (christophe.guillon@st.com)
  */
 
+#define _ATFILE_SOURCE
 #include <stdlib.h>      /* malloc(3), free(3), system(3), */
 #include <string.h>      /* bzero(3), memcpy(3), */
 #include <sys/utsname.h> /* uname(2), struct utsname, */
 #include <unistd.h>      /* faccessat(2), */
 #include <fcntl.h>       /* AT_*, */
 #include <stdio.h>       /* fopen(3), fprintf(3), */
-#include <glib.h>        /* g_hast_*, g_*, */
 #include <assert.h>      /* assert(3),  */
 
 #include "notice.h"
 #include "execve/args.h"
 #include "config.h"
 #include "addons/syscall_addons.h"
+#include "cec_lib.h"
 
 extern char **environ;
 
 /* XXX.  */
 static int active;
-static GHashTable *hash_table;
+static cec_hash_t *hash_table;
 static char archive[PATH_MAX];
 static FILE *script = NULL;
 static int verbose_level = 0;
@@ -55,7 +56,7 @@ static bool care_init()
 	int status;
 
 	/* XXX.  */
-	hash_table = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	hash_table = cec_hash_new(cec_hash_string, cec_compare_strings, cec_free_element);
 	if (hash_table == NULL) {
 		notice(WARNING, INTERNAL, "care: XXXa");
 		return false;
@@ -63,7 +64,9 @@ static bool care_init()
 
 	/* XXX.  */
 	option = getenv("PROOT_CARE_VERBOSE");
-	verbose_level = MAX(option ? atoi(option) : 0, config.verbose_level);
+	verbose_level = option ? atoi(option) : 0;
+	if (config.verbose_level > verbose_level)
+		verbose_level = config.verbose_level;
 
 	/* XXX.  */
 	option = getenv("PROOT_CARE_SCRIPT") ?: "/tmp/care.sh";
@@ -117,16 +120,14 @@ static bool care_init()
 static void care_archive(const char *path)
 {
 	char command[ARG_MAX];
-	void *entry;
 	int status;
 		
 	/* Don't archive if the path was already seen before.
 	 * This ensures the rootfs is re-created as it was
 	 * before any file creation or modification. */
-	entry = g_hash_table_lookup(hash_table, path);
-	if (entry != NULL)
+	if (cec_hash_has_element(hash_table, (void *)path))
 		return;
-	g_hash_table_insert(hash_table, g_strdup(path), (void *)-1);
+	cec_hash_add_element(hash_table, strdup(path));
 
 	/* Don't call ``cpio`` if the file isn't accessible.  */
 	status = faccessat(AT_FDCWD, path, F_OK, AT_SYMLINK_NOFOLLOW);
@@ -170,11 +171,13 @@ static void care_write_script()
 	int status;
 	int i;
 
-	g_hash_table_remove_all(hash_table);
+	cec_hash_del(hash_table);
 
 	// XXX Create run.sh */
-	fprintf(script, "#!/bin/sh");
-	fprintf(script, "\n\n");
+	fprintf(script, "#!/bin/sh\n");
+	fprintf(script, "dir=`dirname $0`\n");
+	fprintf(script, "dir=`cd $dir; pwd`\n");
+	fprintf(script, "\n");
 
 	/* PRoot doesn't [un]set any environment variables, so
 	 * it's safe to dump them at the end.  */
@@ -196,7 +199,7 @@ static void care_write_script()
 		strcpy(argv0, "proot");
 	}
 
-	fprintf(script, "\"${PROOT-`which proot`}\" -B \\\n");
+	fprintf(script, "\"${PROOT-$dir/proot}\" -b /dev -b /proc -b /sys \\\n");
 
 	/* XXX TODO: bindings */
 #if 0
@@ -240,7 +243,7 @@ static void care_write_script()
 		fprintf(script, "\\\n");
 	}
 
-	fprintf(script, "\t\"${ROOTFS-$PWD}\" \\\n");
+	fprintf(script, "\t\"${ROOTFS-$dir}\" \\\n");
 
 	assert(config.command);
 	fprintf(script, "\t");
