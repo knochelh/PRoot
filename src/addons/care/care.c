@@ -75,8 +75,9 @@ static bool care_init()
 		return false;
 	}
 
-	notice(INFO, USER, "care: %s execution information in: %s",
-		script_exists ? "overwriting (!)" : "writing", option);
+	if (verbose_level > 0)
+		notice(INFO, USER, "care: %s execution information in: %s",
+		       script_exists ? "overwriting (!)" : "writing", option);
 
 	/* XXX.  */
 	option = getenv("PROOT_CARE_ARCHIVE") ?: "/tmp/care.cpio";
@@ -105,8 +106,9 @@ static bool care_init()
 	else
 		append = true;
 
-	notice(INFO, USER, "care: %s data in: %s",
-		append ? "appending (!)" : "writing", option);
+	if (verbose_level > 0)
+		notice(INFO, USER, "care: %s data in: %s",
+		       append ? "appending (!)" : "writing", option);
 
 	return true;
 }
@@ -177,8 +179,12 @@ static void care_write_script()
 	/* PRoot doesn't [un]set any environment variables, so
 	 * it's safe to dump them at the end.  */
 	fprintf(script, "env --ignore-environment \\\n");
-	for (i = 0; environ[i] != NULL; i++)
-		fprintf(script, "\t'%s' \\\n", environ[i]);
+	for (i = 0; environ[i] != NULL; i++) {
+		if (strncmp(environ[i], "PROOT_ADDON_CARE=", strlen("PROOT_ADDON_CARE=")) != 0 &&
+		    strncmp(environ[i], "PROOT_CARE_SCRIPT=", strlen("PROOT_CARE_SCRIPT=")) != 0 &&
+		    strncmp(environ[i], "PROOT_CARE_ARCHIVE=", strlen("PROOT_CARE_ARCHIVE=")) != 0)
+			fprintf(script, "\t'%s' \\\n", environ[i]);
+	}
 
 	/*
 	 * XXX command-line.
@@ -190,7 +196,7 @@ static void care_write_script()
 		strcpy(argv0, "proot");
 	}
 
-	fprintf(script, "'%s' \\\n", argv0);
+	fprintf(script, "\"${PROOT-`which proot`}\" -B \\\n");
 
 	/* XXX TODO: bindings */
 #if 0
@@ -234,8 +240,7 @@ static void care_write_script()
 		fprintf(script, "\\\n");
 	}
 
-	assert(config.guest_rootfs);
-	fprintf(script, "\t'%s' \\\n", config.guest_rootfs);
+	fprintf(script, "\t\"${ROOTFS-$PWD}\" \\\n");
 
 	assert(config.command);
 	fprintf(script, "\t");
