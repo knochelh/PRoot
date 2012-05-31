@@ -36,6 +36,14 @@
 #include <assert.h>     /* assert(3), */
 #include <stdlib.h>     /* atexit(3), */
 
+/* Old distribs (RHEL_4) do not define these flags. */
+#ifndef PTRACE_O_TRACEEXIT
+#define PTRACE_O_TRACEEXIT 0x00000040
+#endif
+#ifndef PTRACE_EVENT_EXIT
+#define PTRACE_EVENT_EXIT 6
+#endif
+
 #include "trace.h"
 #include "notice.h"
 #include "path/path.h"
