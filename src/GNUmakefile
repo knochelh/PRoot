@@ -2,7 +2,8 @@
 #     make -f ${SOMEWHERE}/proot/src/GNUmakefile
 
 # the VPATH variable must points to the actual makefile directory
-VPATH	:= $(dir $(lastword $(MAKEFILE_LIST)))
+MAKEDIR := $(dir $(lastword $(MAKEFILE_LIST)))
+VPATH	:= $(MAKEDIR)
 GIT      = git
 RM       = rm
 INSTALL  = install
@@ -77,7 +78,7 @@ OBJECTS = cli.o			\
 ifneq ($(ENABLE_ADDONS),)
 OBJECTS += addons/syscall_addons.o
 CPPFLAGS += -DENABLE_ADDONS
-OBJECTS += $(subst .c,.o,$(wildcard $(addsuffix /*.c, $(addprefix addons/, $(ENABLE_ADDONS)))))
+OBJECTS += $(subst $(MAKEDIR)/,,$(subst .c,.o,$(wildcard $(addsuffix /*.c, $(addprefix $(MAKEDIR)/addons/, $(ENABLE_ADDONS))))))
 endif
 
 
