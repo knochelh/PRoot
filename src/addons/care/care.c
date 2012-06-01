@@ -47,6 +47,30 @@ static char archive[PATH_MAX];
 static FILE *script = NULL;
 static int verbose_level = 0;
 static bool append = false;
+static const char *replay_bindings[] = {
+	"/proc",
+	"/sys",
+	"/dev",
+	NULL
+};
+
+static const char *replay_filter_env[] = {
+	"PROOT_ADDON_CARE",
+	"PROOT_CARE_SCRIPT",
+	"PROOT_CARE_ARCHIVE",
+	"PROOT_CARE_VERBOSE",
+	NULL
+};
+
+static const char *replay_replace_env[] = {
+	"DISPLAY",
+	"http_proxy",
+	"https_proxy",
+	"ftp_proxy",
+	"no_proxy",
+	"XAUTHORITY",
+	NULL
+};
 
 /* XXX.  */
 static bool care_init()
@@ -169,8 +193,14 @@ static void care_write_script()
 	struct utsname utsname;
 	char argv0[PATH_MAX];
 	int status;
-	int i;
+	int i, j;
 
+	/* Force archive of replay bindings to avoid proot warnings at replay time. */
+	for(i = 0; replay_bindings[i] != NULL; i++) {
+		care_archive(replay_bindings[i]);
+	}
+
+	/* Destroy hash table. */
 	cec_hash_del(hash_table);
 
 	// XXX Create run.sh */
@@ -183,10 +213,28 @@ static void care_write_script()
 	 * it's safe to dump them at the end.  */
 	fprintf(script, "env --ignore-environment \\\n");
 	for (i = 0; environ[i] != NULL; i++) {
-		if (strncmp(environ[i], "PROOT_ADDON_CARE=", strlen("PROOT_ADDON_CARE=")) != 0 &&
-		    strncmp(environ[i], "PROOT_CARE_SCRIPT=", strlen("PROOT_CARE_SCRIPT=")) != 0 &&
-		    strncmp(environ[i], "PROOT_CARE_ARCHIVE=", strlen("PROOT_CARE_ARCHIVE=")) != 0)
-			fprintf(script, "\t'%s' \\\n", environ[i]);
+		int skip = 0;
+		for (j = 0; replay_filter_env[j] != NULL; j++) {
+			int len = strlen(replay_filter_env[j]);
+			if (strncmp(environ[i], replay_filter_env[j], len) == 0 &&
+			    environ[i][len] == '=') {
+				skip = 1;
+				break;
+			}
+		}
+		if (skip) continue;
+		for (j = 0; replay_replace_env[j] != NULL; j++) {
+			int len = strlen(replay_replace_env[j]);
+			if (strncmp(environ[i], replay_replace_env[j], len) == 0 &&
+			    environ[i][len] == '=') {
+				fprintf(script, "\t\"%.*s=$%.*s\" \\\n", len, environ[i],
+					len, environ[i]);
+				skip = 1;
+				break;
+			}
+		}
+		if (skip) continue;
+		fprintf(script, "\t'%s' \\\n", environ[i]);
 	}
 
 	/*
@@ -199,7 +247,11 @@ static void care_write_script()
 		strcpy(argv0, "proot");
 	}
 
-	fprintf(script, "\"${PROOT-$dir/proot}\" -b /dev -b /proc -b /sys \\\n");
+	fprintf(script, "\"${PROOT-$dir/proot}\" \\\n");
+
+	for(i = 0; replay_bindings[i] != NULL; i++) {
+		fprintf(script, "\t-b '%s' \\\n", replay_bindings[i]);
+	}
 
 	/* XXX TODO: bindings */
 #if 0
