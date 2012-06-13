@@ -40,8 +40,6 @@
 #include "execve/args.h"
 #include "addons/syscall_addons.h"
 
-#include SYSNUM_HEADER
-
 /**
  * Defines OUTPUT macro for all addon outputs.
  */
@@ -195,11 +193,22 @@ static int addon_enter(struct tracee_info *tracee)
 
 	if (!active) return 0;
 
-	switch(tracee->sysnum) {
-	case PR_execve:
-		status = process_execve(tracee);
+	if (tracee->uregs == uregs) {
+#include SYSNUM_HEADER
+		switch(tracee->sysnum) {
+		case PR_execve:
+			status = process_execve(tracee);
+		}
 	}
-	
+#ifdef SYSNUM_HEADER2
+	else if (tracee->uregs == uregs2) {
+#include SYSNUM_HEADER2
+		switch(tracee->sysnum) {
+		case PR_execve:
+			status = process_execve(tracee);
+		}
+	}
+#endif
 	return status;
 }
 
