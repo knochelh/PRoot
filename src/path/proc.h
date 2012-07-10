@@ -20,23 +20,26 @@
  * 02110-1301 USA.
  */
 
-#ifndef BINDING_H
-#define BINDING_H
+#ifndef PROC_H
+#define PROC_H
 
-#include <limits.h> /* PATH_MAX, */
-#include <stdbool.h>
+#include <limits.h>
 
-extern void bind_path(const char *path, const char *location, bool must_exist);
-extern void print_bindings(void);
+#include "tracee/info.h"
+#include "path/path.h"
 
-enum binding_side {
-	GUEST_SIDE = 1,
-	HOST_SIDE = 2,
+/* Action to do after a call to readlink_proc().  */
+enum action {
+	DEFAULT        = 0,    /* Nothing special to do, threat it as a regular link.  */
+	CANONICALIZE   = 1,    /* The symlink was dereferenced, now canonicalize it.  */
+	DONT_CANONICALIZE = 2, /* The symlink shouldn't be dereferenced nor canonicalized.  */
 };
 
-extern const char *get_path_binding(enum binding_side side, const char path[PATH_MAX]);
-extern int substitute_binding(enum binding_side side, char path[PATH_MAX]);
 
-extern void init_bindings(void);
+extern enum action readlink_proc(const struct tracee_info *tracee, char result[PATH_MAX],
+				const char path[PATH_MAX], const char component[NAME_MAX],
+				enum path_comparison comparison);
 
-#endif /* BINDING_H */
+extern size_t readlink_proc2(const struct tracee_info *tracee, char result[PATH_MAX], const char path[PATH_MAX]);
+
+#endif /* PROC_H */

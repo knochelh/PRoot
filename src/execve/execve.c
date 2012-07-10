@@ -83,7 +83,8 @@ static int expand_interp(struct tracee_info *tracee,
 			 char t_interp[PATH_MAX],
 			 char u_interp[PATH_MAX],
 			 char **argv[],
-			 extract_interp_t callback)
+			 extract_interp_t callback,
+			 bool ignore_interpreter)
 {
 	char argument[ARG_MAX];
 
@@ -96,10 +97,10 @@ static int expand_interp(struct tracee_info *tracee,
 	if (status < 0)
 		return status;
 
-	/* Skip the extraction of the ELF interpreter on demand, in
+	/* Skip the extraction of the interpreter on demand, in
 	 * this case we execute the translation of u_path (t_interp)
 	 * directly. */
-	if (callback == extract_elf_interp && config.ignore_elf_interpreter) {
+	if (ignore_interpreter) {
 		strcpy(u_interp, u_path);
 		return 0;
 	}
@@ -144,7 +145,7 @@ static int expand_interp(struct tracee_info *tracee,
 	 */
 
 	VERBOSE(3, "expand shebang: %s -> %s %s %s",
-		(*argv)[0], u_path, argument, u_path);
+		(*argv)[0], u_interp, argument, u_path);
 
 	if (argument[0] != '\0')
 		status = push_args(true, argv, 3, u_interp, argument, u_path);
@@ -202,10 +203,14 @@ int translate_execve(struct tracee_info *tracee)
 	char **argv = NULL;
 	char *argv0 = NULL;
 
+	bool ignore_elf_interpreter = config.ignore_elf_interpreter;
 	bool envp_has_changed = false;
 	bool argv_has_changed = false;
+	bool inhibit_rpath = false;
 	int size = 0;
 	int status;
+
+	assert(tracee != NULL);
 
 	status = get_sysarg_path(tracee, u_path, SYSARG_1);
 	if (status < 0)
@@ -224,73 +229,78 @@ int translate_execve(struct tracee_info *tracee)
 		goto end;
 	assert(envp != NULL);
 
-	status = expand_interp(tracee, u_path, t_interp, u_interp, &argv, extract_script_interp);
+	status = expand_interp(tracee, u_path, t_interp, u_interp, &argv, extract_script_interp, false);
 	if (status < 0)
 		goto end;
 	argv_has_changed = (status > 0);
 
-	/* I'd prefer the binfmt_misc approach instead.  */
-	if (config.qemu && !is_host_elf(t_interp)) {
-		status = push_args(false, &argv, 1, u_interp);
-		if (status < 0)
-			goto end;
+	/* "/proc/self/exe" points to a canonicalized path -- from the
+	 * guest point-of-view --, hence detranslate_path(t_interp).
+	 * We can re-use u_path since it is not useful anymore.  */
+	strcpy(u_path, t_interp);
+	(void) detranslate_path(tracee, u_path, NULL);
+	if (tracee->exe != NULL)
+		free(tracee->exe);
+	tracee->exe = strdup(u_path);
 
-		status = push_args(true, &argv, -1, config.qemu);
-		if (status < 0)
-			goto end;
+	if (config.qemu) {
+		/* Prepend the QEMU command to the initial argv[] if
+		 * it's a "foreign" binary.  */
+		if (!is_host_elf(t_interp)) {
+			status = push_args(false, &argv, 1, u_interp);
+			if (status < 0)
+				goto end;
 
-		envp_has_changed = ldso_env_passthru(&envp, &argv, "-E", "-U");
+			status = push_args(true, &argv, -1, config.qemu);
+			if (status < 0)
+				goto end;
 
-		/* Errors are not fatal here.  */
-		if (!argv_has_changed)
-			push_args(false, &argv, 2, "-0", argv0);
-		else
-			push_args(false, &argv, 2, "-0", u_interp);
+			envp_has_changed = ldso_env_passthru(&envp, &argv, "-E", "-U");
 
-		argv_has_changed = true;
+			/* Errors are not fatal here.  */
+			if (!argv_has_changed)
+				push_args(false, &argv, 2, "-0", argv0);
+			else
+				push_args(false, &argv, 2, "-0", u_interp);
 
-		/* Delay the translation of the newly instantiated
-		 * runner until it accesses the program to execute,
-		 * that way the runner can first access its own files
-		 * outside of the rootfs. */
-		tracee->trigger = strdup(u_interp);
-		if (tracee->trigger == NULL) {
-			status = -ENOMEM;
-			goto end;
+			argv_has_changed = true;
+
+			/* Launch the runner actually. */
+			strcpy(t_interp, config.qemu[0]);
+			status = join_paths(2, u_interp, config.host_rootfs, config.qemu[0]);
+			if (status < 0)
+				goto end;
+
+			/* Don't use the dynamic linker as a loader,
+			 * this makes QEMU v1.1 crash.  */
+			ignore_elf_interpreter = true;
 		}
-
-		/* Launch the runner actually. */
-		strcpy(t_interp, config.qemu[0]);
-	}
-	else {
-		bool inhibit_rpath = false;
 
 		/* Provide information to the host dynamic linker to
 		 * find host libraries (remember the guest root
 		 * file-system contains libraries for the guest
-		 * architecture only).  Errors are not fatal here.  */
-		if (config.qemu) {
-			status = rebuild_host_ldso_paths(t_interp, &envp);
-			if (status < 0)
-				goto end;
-			inhibit_rpath = (status > 0);
-			envp_has_changed = true;
-		}
-
-		status = expand_interp(tracee, u_interp, t_interp, u_path /* dummy */, &argv, extract_elf_interp);
+		 * architecture only).  */
+		status = rebuild_host_ldso_paths(t_interp, &envp);
 		if (status < 0)
 			goto end;
-		tracee->forced_elf_interpreter = (status > 0);
-		argv_has_changed = argv_has_changed || tracee->forced_elf_interpreter;
+		inhibit_rpath = (status > 0);
+		envp_has_changed = true;
+	}
 
-		if (inhibit_rpath && !config.ignore_elf_interpreter) {
-			/* Tell the dynamic linker to ignore RPATHs specified
-			 * in the *main* program.  To disable the RPATH
-			 * mechanism globally, we have to list all objects
-			 * here (NYI).  Errors are not fatal here.  */
-			status = push_args(false, &argv, 2, "--inhibit-rpath", "''");
-			argv_has_changed = argv_has_changed || (status > 0);
-		}
+	tracee->forced_elf_interpreter = !ignore_elf_interpreter;
+
+	status = expand_interp(tracee, u_interp, t_interp, u_path /* dummy */, &argv, extract_elf_interp, ignore_elf_interpreter);
+	if (status < 0)
+		goto end;
+	argv_has_changed = argv_has_changed || (status > 0);
+
+	if (status > 0 && inhibit_rpath) {
+		/* Tell the dynamic linker to ignore RPATHs specified
+		 * in the *main* program.  To disable the RPATH
+		 * mechanism globally, we have to list all objects
+		 * here (NYI).  Errors are not fatal here.  */
+		status = push_args(false, &argv, 2, "--inhibit-rpath", "''");
+		argv_has_changed = argv_has_changed || (status > 0);
 	}
 
 	VERBOSE(4, "execve: %s", t_interp);

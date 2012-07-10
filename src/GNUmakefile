@@ -10,7 +10,7 @@ INSTALL  = install
 CC       = gcc
 LD       = $(CC)
 CPPFLAGS = -I. -I$(VPATH)
-CFLAGS   = -Wall -O0 -g
+CFLAGS   = -Wall -O2
 LDFLAGS  = 
 LIBS     =
 
@@ -59,6 +59,7 @@ OBJECTS = cli.o			\
 	path/binding.o		\
 	path/canon.o		\
 	path/path.o		\
+	path/proc.o		\
 	syscall/syscall.o	\
 	tracee/info.o		\
 	tracee/mem.o		\

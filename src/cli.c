@@ -23,11 +23,15 @@
 #define _GNU_SOURCE    /* get_current_dir_name(3), */
 #include <stdio.h>     /* printf(3), */
 #include <string.h>    /* string(3), */
-#include <stdlib.h>    /* exit(3), */
+#include <stdlib.h>    /* exit(3), strtol(3), */
 #include <stdbool.h>   /* bool, true, false, */
 #include <assert.h>    /* assert(3), */
 #include <unistd.h>    /* acess(2), pipe(2), dup2(2), */
 #include <sys/wait.h>  /* wait(2), */
+#include <sys/types.h> /* stat(2), */
+#include <sys/stat.h>  /* stat(2), */
+#include <unistd.h>    /* stat(2), */
+#include <errno.h>     /* errno(3), */
 #ifdef DAYS_LIMIT
 #include <time.h>      /* time(2). */
 #endif
@@ -43,6 +47,11 @@
 #include "build.h"
 
 struct config config;
+
+static void handle_option_r(char *value)
+{
+	config.guest_rootfs = value;
+}
 
 static void new_binding(char *value, bool must_exist)
 {
@@ -123,7 +132,7 @@ static char *which(char *const command)
 
 	path = realpath(which_output, NULL);
 	if (!path)
-		notice(ERROR, SYSTEM, "realpath()");
+		notice(ERROR, SYSTEM, "realpath(\"%s\")", which_output);
 
 	return path;
 }
@@ -213,7 +222,12 @@ static void handle_option_0(char *value)
 
 static void handle_option_v(char *value)
 {
-	config.verbose_level++;
+	char *end_ptr = NULL;
+
+	errno = 0;
+	config.verbose_level = strtol(value, &end_ptr, 10);
+	if (errno != 0 || end_ptr == value)
+		notice(ERROR, USER, "option `-v` expects an integer value.");
 }
 
 static void handle_option_V(char *value)
@@ -223,14 +237,14 @@ static void handle_option_V(char *value)
 	printf("Addons: %s\n", ADDONS);
 #endif
 	printf("%s\n", colophon);
-	exit(EXIT_FAILURE);
+	exit(EXIT_SUCCESS);
 }
 
 static void print_usage(bool);
 static void handle_option_h(char *value)
 {
 	print_usage(true);
-	exit(EXIT_FAILURE);
+	exit(EXIT_SUCCESS);
 }
 
 static void handle_option_B(char *value)
@@ -279,7 +293,12 @@ static void print_usage(bool detailed)
 			if (!argument->name || (!detailed && j != 0)) {
 				DETAIL(printf("\n"));
 				printf("\t%s\n", options[i].description);
-				DETAIL(printf("\n"));
+				if (detailed) {
+					if (options[i].detail[0] != '\0')
+						printf("\n%s\n\n", options[i].detail);
+					else
+						printf("\n");
+				}
 				break;
 			}
 
@@ -318,10 +337,15 @@ static void print_execve_help(const char *argv0)
 
 static void error_separator(struct argument *argument)
 {
-	notice(ERROR, USER,
-		"option '%s' and its value must be separated by '%c'.",
-		argument->name,
-		argument->separator);
+	if (argument->separator == '\0')
+		notice(ERROR, USER,
+			"option '%s' expects no value.",
+			argument->name);
+	else
+		notice(ERROR, USER,
+			"option '%s' and its value must be separated by '%c'.",
+			argument->name,
+			argument->separator);
 }
 
 #ifdef DAYS_LIMIT
@@ -355,7 +379,7 @@ int main(int argc, char *argv[])
 		char *arg = argv[i];
 
 		/* The current argument is the value of a short option.  */
-		if (handler) {
+		if (handler != NULL) {
 			handler(arg);
 			handler = NULL;
 			continue;
@@ -410,21 +434,33 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		notice(ERROR, USER, "unknown option '%s'.", arg, argv[0]);
+		notice(ERROR, USER, "unknown option '%s'.", arg);
 
 	known_option:
-		if (handler != NULL && argc == i)
+		if (handler != NULL && i == argc - 1)
 			notice(ERROR, USER,
-				"missing value for option '%s'.", arg, argv[0]);
+				"missing value for option '%s'.", arg);
 	}
 
-	if (argc == i)
-		notice(ERROR, USER,
-			"no guest rootfs were specified.", argv[0]);
+	/* When no guest rootfs were specified: if the first bare
+	 * option is a directory, then the old command-line interface
+	 * (similar to the chroot one) is expected.  Otherwise this is
+	 * the new command-line interface where the default guest
+	 * rootfs is "/".
+	 */
+	if (config.guest_rootfs == NULL) {
+		struct stat buf;
 
-	config.guest_rootfs = realpath(argv[i++], NULL);
+		status = stat(argv[i], &buf);
+		if (status == 0 && S_ISDIR(buf.st_mode))
+			config.guest_rootfs = argv[i++];
+		else
+			config.guest_rootfs = "/";
+	}
+
+	config.guest_rootfs = realpath(config.guest_rootfs, NULL);
 	if (config.guest_rootfs == NULL)
-		notice(ERROR, SYSTEM, "realpath(\"%s\")", argv[i - 1]);
+		notice(ERROR, SYSTEM, "realpath(\"%s\")", config.guest_rootfs);
 
 	if (i < argc)
 		config.command = &argv[i];
@@ -436,7 +472,6 @@ int main(int argc, char *argv[])
 
 	/* TODO: remove the need for initialization.  */
 	init_module_path();
-	init_module_tracee_info();
 	init_module_ldso();
 
 	if (config.verbose_level)

@@ -28,11 +28,11 @@
 #include <unistd.h>    /* access(2), lstat(2), */
 #include <string.h>    /* string(3), */
 #include <assert.h>    /* assert(3), */
-#include <stdio.h>     /* sprintf(3), */
 
 #include "path/canon.h"
 #include "path/path.h"
 #include "path/binding.h"
+#include "path/proc.h"
 
 #ifdef ENABLE_ADDONS
 #include "addons/syscall_addons.h"
@@ -48,7 +48,7 @@
  * doing. This function returns -errno if an error occured, otherwise
  * it returns 0.
  */
-int canonicalize(pid_t pid, const char *fake_path, int deref_final,
+int canonicalize(struct tracee_info *tracee, const char *fake_path, bool deref_final,
 		char result[PATH_MAX], unsigned int nb_readlink)
 {
 	const char *cursor;
@@ -88,6 +88,7 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 	cursor = fake_path;
 	is_final = 0;
 	while (!is_final) {
+		enum path_comparison comparison;
 		char component[NAME_MAX];
 		char real_entry[PATH_MAX];
 		struct stat statl;
@@ -110,18 +111,6 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 			continue;
 		}
 
-		/* Very special case: substitute "/proc/self" with "/proc/$pid".
-		   The following check covers only 99.999% of the cases. */
-		if (   strcmp(component, "self") == 0
-		    && strcmp(result, "/proc")   == 0
-		    && (!is_final || deref_final)) {
-			status = sprintf(component, "%d", pid);
-			if (status < 0)
-				return -EPERM;
-			if (status >= sizeof(component))
-				return -EPERM;
-		}
-
 		/* Check which kind of directory we have to
 		   canonicalize; either a binding or a
 		   translatable one. */
@@ -139,7 +128,7 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 		}
 
 #ifdef ENABLE_ADDONS
-		status = syscall_addons_canon_host_enter(get_tracee_info(pid, false), real_entry);
+		status = syscall_addons_canon_host_enter(tracee, real_entry);
 		if (status < 0)
 			return status;
 #endif
@@ -147,6 +136,18 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 		notify_all_plugins(CANON_HOST_ENTRY, tracee, (intptr_t)real_entry);
 #endif
 		status = lstat(real_entry, &statl);
+
+		/* Return an error if a non-final component isn't a
+		 * directory nor a symlink.  The error is "No such
+		 * file or directory" if this component doesn't exist,
+		 * otherwise the error is "Not a directory".  This
+		 * sanity check is bypassed if the canonicalization is
+		 * made in the name of PRoot itself (!tracee) since
+		 * this would return a spurious error during the
+		 * creation of "deep" guest binding paths.  */
+		if (!is_final && tracee != NULL &&
+		    !S_ISDIR(statl.st_mode) && !S_ISLNK(statl.st_mode))
+			return (status < 0 ? -ENOENT : -ENOTDIR);
 
 		/* Nothing special to do if it's not a link or if we
 		   explicitly ask to not dereference 'fake_path', as
@@ -167,23 +168,43 @@ int canonicalize(pid_t pid, const char *fake_path, int deref_final,
 		/* It's a link, so we have to dereference *and*
 		   canonicalize to ensure we are not going outside the
 		   new root. */
-		status = readlink(real_entry, tmp, sizeof(tmp));
-		if (status < 0)
-			return status;
-		else if (status == sizeof(tmp))
-			return -ENAMETOOLONG;
-		tmp[status] = '\0';
+		comparison = compare_paths("/proc", result);
+		switch (comparison) {
+		case PATHS_ARE_EQUAL:
+		case PATH1_IS_PREFIX:
+			/* Some links in "/proc" are generated
+			 * dynamically by the kernel.  PRoot has to
+			 * emulate some of them.  */
+			status = readlink_proc(tracee, tmp, result, component, comparison);
+			if (status < 0)
+				return status;
+			else if (status == DONT_CANONICALIZE) {
+				strcpy(result, tmp);
+				return 0;
+			}
+			else if (status == CANONICALIZE)
+				break;
+			else
+				; /* DEFAULT: Fall through.  */
+		default:
+			status = readlink(real_entry, tmp, sizeof(tmp));
+			if (status < 0)
+				return status;
+			else if (status == sizeof(tmp))
+				return -ENAMETOOLONG;
+			tmp[status] = '\0';
 
-		/* Remove the leading "root" part if needed, it's
-		 * useful for "/proc/self/cwd/" for instance. */
-		status = detranslate_path(tmp, real_entry);
-		if (status < 0)
-			return status;
+			/* Remove the leading "root" part if needed, it's
+			 * useful for "/proc/self/cwd/" for instance. */
+			status = detranslate_path(tracee, tmp, real_entry);
+			if (status < 0)
+				return status;
+		}
 
 		/* Canonicalize recursively the referee in case it
 		   is/contains a link, moreover if it is not an
-		   absolute link so it is relative to 'result'. */
-		status = canonicalize(pid, tmp, 1, result, ++nb_readlink);
+		   absolute link then it is relative to 'result'. */
+		status = canonicalize(tracee, tmp, true, result, ++nb_readlink);
 		if (status < 0)
 			return status;
 	}

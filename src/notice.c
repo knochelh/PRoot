@@ -26,14 +26,20 @@
 #include <stdarg.h> /* va_*, */
 #include <stdio.h>  /* vfprintf(3), */
 
+#include "config.h"
 #include "notice.h"
 
 /**
- * XXX
+ * Print @message to the standard error stream according to its
+ * @severity and @origin.  This function exits if the @severity is
+ * ERROR.
  */
 void notice(enum notice_severity severity, enum notice_origin origin, const char *message, ...)
 {
 	va_list extra_params;
+
+	if (config.verbose_level < 0 && severity != ERROR)
+		return;
 
 	switch (severity) {
 	case WARNING:

@@ -89,7 +89,7 @@ void bind_path(const char *host_path, const char *guest_path, bool must_exist)
 
 	tmp = guest_path ? guest_path : host_path;
 	if (strlen(tmp) >= PATH_MAX) {
-		notice(ERROR, INTERNAL, "binding location \"%s\" is too long", tmp);
+		notice(ERROR, INTERNAL, "guest path (binding) \"%s\" is too long", tmp);
 		goto error;
 	}
 
@@ -131,7 +131,7 @@ void print_bindings()
  * Get the binding for the given @path (relatively to the given
  * binding @side).
  */
-static const struct binding *get_binding(enum binding_side side, char path[PATH_MAX])
+static const struct binding *get_binding(enum binding_side side, const char path[PATH_MAX])
 {
 	const struct binding *bindings;
 	const struct binding *binding;
@@ -194,7 +194,7 @@ static const struct binding *get_binding(enum binding_side side, char path[PATH_
  * Get the binding path for the given @path (relatively to the given
  * binding @side).
  */
-const char *get_path_binding(enum binding_side side, char path[PATH_MAX])
+const char *get_path_binding(enum binding_side side, const char path[PATH_MAX])
 {
 	const struct binding *binding;
 
@@ -395,11 +395,12 @@ static void create_dummy(char c_path[PATH_MAX], const char *real_path)
 		}
 	}
 
-	notice(INFO, USER, "create the binding location \"%s\"", c_path);
+	notice(INFO, USER, "create the guest path (binding) \"%s\"", c_path);
 	return;
 
 error:
-	notice(WARNING, USER, "can't create parent directories for \"%s\"", c_path);
+	notice(WARNING, USER,
+		"can't create the guest path (binding) \"%s\": you can still access it *directly*, without seeing it though", c_path);
 }
 
 /**
@@ -420,11 +421,11 @@ static struct binding *insort_binding(enum binding_side side, const struct bindi
 
 	switch (side) {
 	case GUEST_SIDE:
-		bindings = bindings_guest_order;
+		next = bindings = bindings_guest_order;
 		break;
 
 	case HOST_SIDE:
-		bindings = bindings_host_order;
+		next = bindings = bindings_host_order;
 		break;
 
 	default:
@@ -464,9 +465,8 @@ static struct binding *insort_binding(enum binding_side side, const struct bindi
 			}
 
 			notice(WARNING, USER,
-				"both '%s' and '%s' are bound to '%s, "
-				"only the first binding is enabled",
-				iterator->host.path, binding->host.path, binding->guest.path);
+				"both '%s' and '%s' are bound to '%s', only the last binding is active.",
+				binding->host.path, iterator->host.path, binding->guest.path);
 			return NULL;
 
 		case PATH1_IS_PREFIX:
@@ -519,7 +519,8 @@ static struct binding *insort_binding(enum binding_side side, const struct bindi
 			bindings = new_binding;
 	}
 	else {
-		new_binding->next     = bindings;
+		/* First item in this list.  */
+		new_binding->next     = NULL;
 		new_binding->previous = NULL;
 		bindings              = new_binding;
 	}
@@ -559,7 +560,7 @@ void init_bindings()
 
 		/* In case binding->guest.path is relative.  */
 		if (!getcwd(binding->guest.path, PATH_MAX)) {
-			notice(WARNING, SYSTEM, "can't sanitize binding \"%s\"");
+			notice(WARNING, SYSTEM, "can't sanitize path (binding) \"%s\", getcwd()", tmp);
 			continue;
 		}
 
@@ -567,9 +568,9 @@ void init_bindings()
 		   alternate rootfs since it is assumed by
 		   substitute_binding().  Note the host path is already
 		   sanitized in bind_path().  */
-		status = canonicalize(0, tmp, 1, binding->guest.path, 0);
+		status = canonicalize(0, tmp, true, binding->guest.path, 0);
 		if (status < 0) {
-			notice(WARNING, INTERNAL, "sanitizing the binding location \"%s\": %s",
+			notice(WARNING, INTERNAL, "sanitizing the guest path (binding) \"%s\": %s",
 			       tmp, strerror(-status));
 			continue;
 		}

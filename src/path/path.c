@@ -28,13 +28,14 @@
 #include <sys/types.h> /* pid_t, */
 #include <sys/stat.h>  /* S_ISDIR, */
 #include <dirent.h>    /* opendir(3), readdir(3), */
-#include <stdio.h>     /* sprintf(3), */
+#include <stdio.h>     /* snprintf(3), */
 #include <errno.h>     /* E*, */
 #include <stddef.h>    /* ptrdiff_t, */
 
 #include "path/path.h"
 #include "path/binding.h"
 #include "path/canon.h"
+#include "path/proc.h"
 #include "notice.h"
 #include "config.h"
 #include "build.h"
@@ -202,26 +203,6 @@ void init_module_path()
 }
 
 /**
- * Check if the translation should be delayed.
- *
- * It is useful when using a runner that needs shared libraries or
- * reads some configuration files, for instance.
- */
-static bool is_delayed(struct tracee_info *tracee, const char *path)
-{
-	if (tracee->trigger == NULL)
-		return false;
-
-	if (compare_paths(tracee->trigger, path) != PATHS_ARE_EQUAL)
-		return true;
-
-	free(tracee->trigger);
-	tracee->trigger = NULL;
-
-	return false;
-}
-
-/**
  * Copy in @result the equivalent of @root + canonicalize(@dir_fd +
  * @fake_path).  If @fake_path is not absolute then it is relative to
  * the directory referred by the descriptor @dir_fd (AT_FDCWD is for
@@ -251,9 +232,9 @@ int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd
 
 		/* Format the path to the "virtual" link. */
 		if (dir_fd == AT_FDCWD)
-			status = sprintf(link, "/proc/%d/cwd", pid);
+			status = snprintf(link, sizeof(link), "/proc/%d/cwd", pid);
 		else
-			status = sprintf(link, "/proc/%d/fd/%d", pid, dir_fd);
+			status = snprintf(link, sizeof(link), "/proc/%d/fd/%d", pid, dir_fd);
 		if (status < 0)
 			return -EPERM;
 		if (status >= sizeof(link))
@@ -276,7 +257,7 @@ int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd
 
 		/* Remove the leading "root" part of the base
 		 * (required!). */
-		status = detranslate_path(result, NULL);
+		status = detranslate_path(tracee, result, NULL);
 		if (status < 0)
 			return status;
 	}
@@ -284,18 +265,9 @@ int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd
 	VERBOSE(4, "pid %d: translate(\"%s\" + \"%s\")", pid, result, fake_path);
 
 	/* Canonicalize regarding the new root. */
-	status = canonicalize(pid, fake_path, deref_final, result, 0);
+	status = canonicalize(tracee, fake_path, deref_final, result, 0);
 	if (status < 0)
 		return status;
-
-	/* Don't use the result of the canonicalization if the
-	 * translation is delayed, use the origin input path instead. */
-	if (config.qemu && tracee != NULL && is_delayed(tracee, fake_path)) {
-		if (strlen(fake_path) >= PATH_MAX)
-			return -ENAMETOOLONG;
-		strcpy(result, fake_path);
-		goto end;
-	}
 
 	/* Don't prepend the new root to the result of the
 	 * canonicalization if it is a binding, instead substitute the
@@ -328,7 +300,7 @@ end:
  * including the end-of-string terminator.  On error it returns
  * -errno.
  */
-int detranslate_path(char path[PATH_MAX], char t_referrer[PATH_MAX])
+int detranslate_path(struct tracee_info *tracee, char path[PATH_MAX], const char t_referrer[PATH_MAX])
 {
 	size_t prefix_length;
 	size_t new_length;
@@ -354,9 +326,20 @@ int detranslate_path(char path[PATH_MAX], char t_referrer[PATH_MAX])
 		sanity_check = false;
 		follow_binding = false;
 
-		/* In some cases bings have to be resolved.  */
+		/* In some cases bindings have to be resolved.  */
 		comparison = compare_paths("/proc", t_referrer);
 		if (comparison == PATH1_IS_PREFIX) {
+			/* Some links in "/proc" are generated
+			 * dynamically by the kernel.  PRoot has to
+			 * emulate some of them.  */
+			char proc_path[PATH_MAX];
+			strcpy(proc_path, path);
+			new_length = readlink_proc2(tracee, proc_path, t_referrer);
+			if (new_length != 0) {
+				strcpy(path, proc_path);
+				return new_length + 1;
+			}
+
 			/* Always resolve bindings for symlinks in
 			 * "/proc", they always point to the emulated
 			 * file-system namespace by design. */
@@ -434,7 +417,7 @@ int detranslate_path(char path[PATH_MAX], char t_referrer[PATH_MAX])
  * Check if the translated @t_path belongs to the guest rootfs, that
  * is, isn't from a binding.
  */
-bool belongs_to_guestfs(char *t_path)
+bool belongs_to_guestfs(const char *t_path)
 {
 	enum path_comparison comparison;
 
@@ -522,7 +505,7 @@ static int foreach_fd(pid_t pid, foreach_fd_t callback)
 	DIR *dirp;
 
 	/* Format the path to the "virtual" directory. */
-	status = sprintf(proc_fd, "/proc/%d/fd", pid);
+	status = snprintf(proc_fd, sizeof(proc_fd), "/proc/%d/fd", pid);
 	if (status < 0 || status >= sizeof(proc_fd))
 		return 0;
 
