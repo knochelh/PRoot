@@ -31,6 +31,10 @@
 #include <fcntl.h>       /* AT_*, */
 #include <stdio.h>       /* fopen(3), fprintf(3), */
 #include <assert.h>      /* assert(3),  */
+#include <sys/utsname.h> /* uname(2), struct utsname, */
+#include <sys/stat.h>    /* fstatat(2), */
+#include <libgen.h>      /* basename(3), dirname(3), */
+#include <errno.h>       /* errno, ENOENT */
 
 #include "notice.h"
 #include "execve/args.h"
@@ -44,6 +48,10 @@ extern char **environ;
 static int active;
 static cec_hash_t *hash_table;
 static char archive[PATH_MAX];
+#ifdef CARE_NO_CPIO		
+static int archive_dir_fd;
+static char copy_buffer[4096];
+#endif
 static FILE *script = NULL;
 static int verbose_level = 0;
 static bool append = false;
@@ -115,6 +123,33 @@ static bool care_init()
 	strcpy(archive, option);
 
 	/* XXX test XXX.  */
+#ifdef CARE_NO_CPIO
+	archive_dir_fd = openat(AT_FDCWD, archive, 0);
+	if (archive_dir_fd < 0) {
+		status = mkdirat(AT_FDCWD, archive, 0755);
+		if (status < 0) {
+			notice(WARNING, INTERNAL, "care: can't create archive dir: %s", archive);
+			return false;
+		}
+		archive_dir_fd = openat(AT_FDCWD, archive, 0);
+		if (archive_dir_fd < 0) {
+			notice(WARNING, INTERNAL, "care: can't open archive dir: %s", archive);
+			return false;
+		}
+	} else {
+		struct stat stat_buf;
+		status = fstatat(AT_FDCWD, archive, &stat_buf, 0);
+		if (status < 0) {
+			notice(WARNING, INTERNAL, "care: can't stat archive dir: %s", archive);
+			return false;
+		}
+		if (!S_ISDIR(stat_buf.st_mode)) {
+			notice(WARNING, INTERNAL, "care: archive is not a directory: %s", archive);
+			return false;
+		}
+		append = true;
+	}
+#else
 	status = access(archive, R_OK | W_OK);
 	if (status < 0) {
 		status = open(archive, O_CREAT|O_RDWR|O_TRUNC);
@@ -132,7 +167,7 @@ static bool care_init()
 	}
 	else
 		append = true;
-
+#endif
 	if (verbose_level > 0)
 		notice(INFO, USER, "care: %s data in: %s",
 		       append ? "appending (!)" : "writing", option);
@@ -140,12 +175,118 @@ static bool care_init()
 	return true;
 }
 
+
+#ifdef CARE_NO_CPIO		
+/* 
+ * Recursively creates a directory path relative to the given
+ * file descriptor. Ignores whether the path is absolute or not,
+ * i.e. skip leadings "/".
+ * Returns the directory fd.
+ */
+static int recmkdirat(int dirfd, const char *path)
+{
+	char *buffer;
+	char *token;
+	int status = 0;
+	int new_dirfd, next_dirfd;
+	buffer = strdup(path);
+	next_dirfd = dirfd;
+	token = strtok(buffer, "/");
+	while(token) {
+		new_dirfd = openat(next_dirfd, token, 0);
+		if (new_dirfd > 0) {
+			/* Check that it's a directory or force unlink. */
+			struct stat stat_buf;
+			status = fstatat(next_dirfd, token, &stat_buf, 0);
+			if (status < 0) {
+				notice(WARNING, INTERNAL, "care: can't stat element %s", token);
+				status = -1;
+				break;
+			}
+			if (!S_ISDIR(stat_buf.st_mode)) {
+				new_dirfd = -1;
+			}
+		}
+		if (new_dirfd < 0) {
+			status = unlinkat(next_dirfd, token, 0);
+			if (status < 0 && errno != ENOENT) {
+				notice(WARNING, INTERNAL, "care: can't unlink archive file: %s", path);
+				break;
+			}
+			status = mkdirat(next_dirfd, token, 0755);
+			if (status < 0) {
+				notice(WARNING, INTERNAL, "care: can't archive directory element: %s", token);
+				break;
+			}
+			new_dirfd = openat(next_dirfd, token, 0);
+			if (new_dirfd < 0) {
+				notice(WARNING, INTERNAL, "care: can't open directory element: %s", token);
+				status = new_dirfd;
+				break;
+			}
+		}
+		if (next_dirfd != dirfd)
+			close(next_dirfd);
+		next_dirfd = new_dirfd;
+		token = strtok(NULL, "/");
+	}
+	free(buffer);
+	if (status < 0) {
+		if (next_dirfd != dirfd)
+			close(next_dirfd);
+		return status;
+	}
+	return next_dirfd;
+}
+
+static int copyat_reg(int srcdirfd, const char *srcpath, int dstdirfd, const char *dstpath)
+{
+	int status = 0;
+	int n, srcfd, dstfd;
+	srcfd = openat(srcdirfd, srcpath, O_RDONLY);
+	if (srcfd < 0) {
+		notice(WARNING, INTERNAL, "care: can't open element for reading: %s", srcpath);
+		status = srcfd;
+		goto end;
+	}
+	dstfd = openat(dstdirfd, dstpath, O_WRONLY|O_CREAT|O_EXCL, 0600);
+	if (srcfd < 0) {
+		notice(WARNING, INTERNAL, "care: can't open element for reading: %s", srcpath);
+		status = srcfd;
+		goto close_src;
+	}
+	while((n = read(srcfd, copy_buffer, sizeof(copy_buffer))) > 0) {
+		int m = write(dstfd, copy_buffer, n);
+		if (m < n) {
+			notice(WARNING, INTERNAL, "care: can't copy archive element: %s", srcpath);
+			status = -1;
+			goto close_dst;
+		}
+	}
+	if (n < 0) {
+		notice(WARNING, INTERNAL, "care: can't read archive element: %s", srcpath);
+		status = -1;
+	}
+ close_dst:
+	close(dstfd);
+ close_src:
+	close(srcfd);
+ end:
+	return status;
+}
+#endif
+
+
 /* XXX.  */
 static void care_archive(const char *path)
 {
-	char command[ARG_MAX];
 	int status;
-		
+#ifdef CARE_NO_CPIO		
+	struct stat stat_buf;
+	char link_buffer[PATH_MAX];
+#else
+	char command[ARG_MAX];
+#endif
 	/* Don't archive if the path was already seen before.
 	 * This ensures the rootfs is re-created as it was
 	 * before any file creation or modification. */
@@ -153,24 +294,84 @@ static void care_archive(const char *path)
 		return;
 	cec_hash_add_element(hash_table, strdup(path));
 
-	/* Don't call ``cpio`` if the file isn't accessible.  */
+	/* Don't archive if the file isn't accessible.  */
 	status = faccessat(AT_FDCWD, path, F_OK, AT_SYMLINK_NOFOLLOW);
 	if (status < 0)
 		return;
 
 	/* XXX.  */
-	status = snprintf(command, ARG_MAX,
+#ifdef CARE_NO_CPIO		
+	status = fstatat(AT_FDCWD, path, &stat_buf, AT_SYMLINK_NOFOLLOW);
+	if (status < 0) {
+		notice(WARNING, INTERNAL, "care: can't stat %s", path);
+		return;
+	}
+	if (S_ISREG(stat_buf.st_mode) || S_ISLNK(stat_buf.st_mode)) {
+		char *buffer = strdup(path);
+		char *base = basename(buffer);
+		char *dir = dirname(buffer);
+		int dir_fd;
+		dir_fd = recmkdirat(archive_dir_fd, dir);
+		if (dir_fd < 0) {
+			notice(WARNING, INTERNAL, "care: can't archive directory: %s", dir);
+			goto free_buffer;
+		}
+		status = unlinkat(dir_fd, base, 0);
+		if (status < 0 && errno != ENOENT) {
+			notice(WARNING, INTERNAL, "care: can't unlink archive file: %s", path);
+			goto free_fd;
+		}
+		if (S_ISREG(stat_buf.st_mode)) {
+			status = copyat_reg(AT_FDCWD, path, dir_fd, base);
+			if (status < 0) {
+				notice(WARNING, INTERNAL, "care: can't copy file to archive: %s", path);
+				goto free_fd;
+			}
+			status = fchmodat(dir_fd, base, stat_buf.st_mode & 0777, 0);
+			if (status < 0) 
+				notice(WARNING, INTERNAL, "care: can't set permission for archive file: %s", path);
+		} else if (S_ISLNK(stat_buf.st_mode)) {
+			status = readlinkat(AT_FDCWD, path, link_buffer, sizeof(link_buffer));
+			if (status < 0 || status >= sizeof(link_buffer)) {
+				notice(WARNING, INTERNAL, "care: can't read link: %s", path);
+				goto free_fd;
+			}
+			link_buffer[status] = '\0';
+			status = symlinkat(link_buffer, dir_fd, base);
+			if (status < 0) {
+				notice(WARNING, INTERNAL, "care: can't add link to archive: %s", path);
+				goto free_fd;
+			}
+		}
+		if (status < 0) 
+			notice(WARNING, INTERNAL, "care: can't archive file: %s", path);
+	free_fd:
+		if (dir_fd != archive_dir_fd) 
+			close(dir_fd);
+	free_buffer:
+		free(buffer);
+	} else if (S_ISDIR(stat_buf.st_mode)) {
+		int fd = recmkdirat(archive_dir_fd, path);
+		if (fd < 0) {
+			notice(WARNING, INTERNAL, "care: can't archive directory: %s", path);
+			return;
+		}
+		if (fd != archive_dir_fd) 
+			close(fd);
+	} /* Skipped otherwise */
+#else
+		status = snprintf(command, ARG_MAX,
 			"echo '%s' | cpio --create %s --file=%s %s\n",
 			path,
 			append ? "--append" : "",
 			archive,
 			verbose_level ? "" : "--quiet >/dev/null 2>&1");
 	if (status < 0) {
-		notice(WARNING, SYSTEM, "care: XXX");
+		notice(WARNING, SYSTEM, "care: can't build cpio command");
 		return;
 	}
 	if (status >= sizeof(command)) {
-		notice(WARNING, INTERNAL, "care: XXX");
+		notice(WARNING, INTERNAL, "care: internal error with cpio command");
 		return;
 	}
 
@@ -180,11 +381,11 @@ static void care_archive(const char *path)
 	/* XXX.  */
 	status = system(command); 
 	if (status != 0) {
-		notice(WARNING, INTERNAL, "care: XXX");
+		notice(WARNING, INTERNAL, "care: can't exec cpio command");
 		return;
 	}
-
 	append = true;
+#endif
 }
 
 /* XXX.  */
@@ -297,9 +498,8 @@ static void care_write_script()
 
 	fprintf(script, "\t\"${ROOTFS-$dir}\" \\\n");
 
-	assert(config.command);
 	fprintf(script, "\t");
-	for (i = 0; config.command[i] != NULL; i++)
+	for (i = 0; config.command && config.command[i] != NULL; i++)
 		fprintf(script, "'%s' ", config.command[i]);
 	fprintf(script, "\\\n");
 
