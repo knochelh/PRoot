@@ -57,6 +57,7 @@ static FILE *output_file;
 static regex_t driver_re;
 static char **opt_args;
 static char *opts;
+static char *driver_cmd;
 
 /**
  * Get current dir for the specified process.
@@ -121,7 +122,8 @@ static int modify_execve(struct tracee_info *tracee, const char *path, char * co
 	char **new_argv = NULL;
 	int status = 0;
 	int size = 0;
-	int i;
+	int i, j = 0;
+	int driver_size = 0;
 
 	if (opt_args != NULL) {
 		for (opts_size = 0; opt_args[opts_size] != NULL; opts_size++)
@@ -135,24 +137,31 @@ static int modify_execve(struct tracee_info *tracee, const char *path, char * co
 		goto end;
 	}
 
+	if (driver_cmd && !tracee->forced_elf_interpreter)
+		driver_size = 1;
 	for (argv_size = 0; argv[argv_size] != NULL; argv_size++)
 		;
 	argv_size++;
 
-	new_argv_size = argv_size + opts_size - 1;
+	new_argv_size = argv_size + opts_size + driver_size - 1;
 	new_argv = (char **)calloc(new_argv_size, sizeof(*new_argv));
 	if (new_argv == NULL) {
 		status = -ENOMEM;
 		goto end;
 	}
-	
-	for (i = 0; i < new_argv_size; i++) {
-		if (i < argv_size - 1) {
-			new_argv[i] = argv[i];
-		} else {
-			new_argv[i] = opt_args[i - (argv_size - 1)];
-		}
+
+	if (driver_size) {
+		status = set_sysarg_path(tracee, driver_cmd, SYSARG_1);
+		if (status < 0) goto end;
+		new_argv[j++] = driver_cmd;
 	}
+	for (i = 0; i < argv_size - 1; i++) {
+		new_argv[j++] = argv[i];
+	}
+	for (i = 0; i < opts_size; i++) {
+		new_argv[j++] = opt_args[i];
+	}
+
 	size = set_args(tracee, new_argv, SYSARG_2);
 	if (size < 0) {
 		status = size;
@@ -181,6 +190,7 @@ static int process_execve(struct tracee_info *tracee)
 	int status = 0;
 	int size = 0;
 	int index;
+	int envp_changed = 0;
 
 	status = get_sysarg_path(tracee, u_path, SYSARG_1);
 	if (status < 0)
@@ -213,14 +223,32 @@ static int process_execve(struct tracee_info *tracee)
 	}
 
 	if (regexec(&driver_re, basename(argv[index]), 0, NULL, 0) == 0) {
-		size = modify_execve(tracee, u_path, argv, envp, cwd_path);
+		if (get_env_entry(envp, "PROOT_ADDON_CC_OPTS_ACTIVE") == NULL) {
+			size = modify_execve(tracee, u_path, argv, envp, cwd_path);
+			if (size < 0) {
+				status = size;
+				goto end;
+			}
+			status = new_env_entry(&envp, "PROOT_ADDON_CC_OPTS_ACTIVE", "1");
+			if (status < 0)
+				goto end;
+			envp_changed = 1;
+		}
+	}
+
+	if (envp_changed) {
+		size = set_args(tracee, envp, SYSARG_3);
 		if (size < 0) {
 			status = size;
 			goto end;
 		}
 	}
+
 	if (verbose) {
 		OUTPUT("VERB: changed: ");
+		status = get_sysarg_path(tracee, u_path, SYSARG_1);
+		if (status < 0)
+			goto end;
 		status = get_args(tracee, &argv, SYSARG_2);
 		if (status < 0)
 			goto  end;
@@ -348,6 +376,8 @@ static void __attribute__((constructor)) init(void)
 	if (opts != NULL) {
 		opt_args = parse_opts(opts);
 	}
+	driver_cmd = getenv("PROOT_ADDON_CC_OPTS_DRIVER");
+	if (driver_cmd) driver_cmd = realpath(driver_cmd, NULL);
 
 	/* Open output file.  */
 	if (strcmp(output, ":stdout") == 0)
