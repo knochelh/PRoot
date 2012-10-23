@@ -25,10 +25,9 @@
 #include <stdlib.h>  /* atoi(3), strtol(3), */
 #include <errno.h>   /* E*, */
 #include <assert.h>  /* assert(3), */
-#include <unistd.h>  /* getpid(2), */
 
 #include "path/proc.h"
-#include "tracee/info.h"
+#include "tracee/tracee.h"
 #include "path/path.h"
 
 /**
@@ -40,18 +39,16 @@
  * Unlike readlink(), this function includes the nul terminating byte
  * to @result.
  */
-enum action readlink_proc(const struct tracee_info *tracee, char result[PATH_MAX],
+Action readlink_proc(const Tracee *tracee, char result[PATH_MAX],
 			const char base[PATH_MAX], const char component[NAME_MAX],
-			enum path_comparison comparison)
+			Comparison comparison)
 {
-	const struct tracee_info *known_tracee;
+	const Tracee *known_tracee;
 	char proc_path[64]; /* 64 > sizeof("/proc//fd/") + 2 * sizeof(#ULONG_MAX) */
 	int status;
 	pid_t pid;
 
 	assert(comparison == compare_paths("/proc", base));
-
-	pid = (tracee != NULL ? tracee->pid : getpid());
 
 	/* Remember: comparison = compare_paths("/proc", base)  */
 	switch (comparison) {
@@ -60,7 +57,7 @@ enum action readlink_proc(const struct tracee_info *tracee, char result[PATH_MAX
 		if (strcmp(component, "self") != 0)
 			return DEFAULT;
 
-		status = snprintf(result, PATH_MAX, "/proc/%d", pid);
+		status = snprintf(result, PATH_MAX, "/proc/%d", tracee->pid);
 		if (status < 0 || status >= PATH_MAX)
 			return -EPERM;
 
@@ -79,7 +76,7 @@ enum action readlink_proc(const struct tracee_info *tracee, char result[PATH_MAX
 	if (pid == 0)
 		return DEFAULT;
 
-	known_tracee = get_tracee_info(pid, false);
+	known_tracee = get_tracee(pid, false);
 	if (!known_tracee)
 		return DEFAULT;
 
@@ -91,24 +88,24 @@ enum action readlink_proc(const struct tracee_info *tracee, char result[PATH_MAX
 	comparison = compare_paths(proc_path, base);
 	switch (comparison) {
 	case PATHS_ARE_EQUAL:
-#define SUBSTITUTE(name)					\
+#define SUBSTITUTE(name, field)					\
 		do {						\
 			if (strcmp(component, #name) != 0)	\
 				break;				\
 								\
-			status = strlen(known_tracee->name);	\
+			status = strlen(known_tracee->field);	\
 			if (status >= PATH_MAX)			\
 				return -EPERM;			\
 								\
-			strncpy(result, known_tracee->name, status + 1); \
+			strncpy(result, known_tracee->field, status + 1); \
 			return CANONICALIZE;			\
 		} while (0)
 
 		/* Substitute link "/proc/<PID>/???" with the content
 		 * of tracee->???.  */
-		SUBSTITUTE(exe);
+		SUBSTITUTE(exe, exe);
+		SUBSTITUTE(cwd, fs->cwd);
 		//SUBSTITUTE(root);
-		//SUBSTITUTE(cwd);
 #undef SUBSTITUTE
 		return DEFAULT;
 
@@ -166,9 +163,9 @@ enum action readlink_proc(const struct tracee_info *tracee, char result[PATH_MAX
  * Unlike readlink(), this function includes the nul terminating byte
  * to @result (but this byte is not counted in the returned value).
  */
-size_t readlink_proc2(const struct tracee_info *tracee, char result[PATH_MAX], const char referer[PATH_MAX])
+size_t readlink_proc2(const Tracee *tracee, char result[PATH_MAX], const char referer[PATH_MAX])
 {
-	enum action action;
+	Action action;
 	char base[PATH_MAX];
 	char *component;
 

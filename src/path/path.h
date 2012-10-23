@@ -28,43 +28,65 @@
 #include <limits.h> /* PATH_MAX, */
 #include <stdbool.h>
 
-#include "tracee/info.h"
+#include "tracee/tracee.h"
 
-/* Helper macros. */
-#define REGULAR 1
-#define SYMLINK 0
+/* File type.  */
+typedef enum {
+	REGULAR,
+	SYMLINK,
+} Type;
 
-#define STRONG  1
-#define WEAK    0
+/* Path point-of-view.  */
+typedef enum {
+	GUEST,
+	HOST,
 
-extern void init_module_path();
-extern int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd, const char *fake_path, int deref_final);
-extern int detranslate_path(struct tracee_info *tracee, char path[PATH_MAX], const char t_referrer[PATH_MAX]);
-extern bool belongs_to_guestfs(const char *path);
+	/* Used for bindings as specified by the user but not
+	 * canonicalized yet (new_binding, initialize_binding).  */
+	PENDING,
+} Side;
+
+/* Path with cached attributes.  */
+typedef struct {
+	char path[PATH_MAX];
+	size_t length;
+	Side side;
+} Path;
+
+/* Path ending type.  */
+typedef enum {
+	NOT_FINAL,
+	FINAL_NORMAL,
+	FINAL_SLASH,
+	FINAL_DOT
+} Finality;
+
+/* Comparison between two paths.  */
+typedef enum Comparison {
+	PATHS_ARE_EQUAL,
+	PATH1_IS_PREFIX,
+	PATH2_IS_PREFIX,
+	PATHS_ARE_NOT_COMPARABLE,
+} Comparison;
+
+extern int which(Tracee *tracee, const char *paths, char host_path[PATH_MAX], char *const command);
+extern int realpath2(Tracee *tracee, char host_path[PATH_MAX], const char *path, bool deref_final);
+extern int getcwd2(Tracee *tracee, char guest_path[PATH_MAX]);
+extern void chop_finality(char *path);
+
+extern int translate_path(Tracee *tracee, char host_path[PATH_MAX],
+			int dir_fd, const char *guest_path, bool deref_final);
+
+extern int detranslate_path(Tracee *tracee, char path[PATH_MAX], const char t_referrer[PATH_MAX]);
+extern bool belongs_to_guestfs(const Tracee *tracee, const char *path);
 
 extern int join_paths(int number_paths, char result[PATH_MAX], ...);
-extern int next_component(char component[NAME_MAX], const char **cursor);
-
-#define FINAL_NORMAL    1
-#define FINAL_FORCE_DIR 2
+extern Finality next_component(char component[NAME_MAX], const char **cursor);
 extern void pop_component(char *path);
+extern int list_open_fd(const Tracee *tracee);
 
-extern int check_fd(pid_t pid);
-extern int list_open_fd(pid_t pid);
-
-extern char root[PATH_MAX];
-extern size_t root_length;
-
-enum path_comparison {
-	PATHS_ARE_EQUAL = 0,
-	PATH1_IS_PREFIX = -1,
-	PATH2_IS_PREFIX = 1,
-	PATHS_ARE_NOT_COMPARABLE = 125,
-};
-
-extern enum path_comparison compare_paths(const char *path1, const char *path2);
-extern enum path_comparison compare_paths2(const char *path1, size_t length1,
-					const char *path2, size_t length2);
+extern Comparison compare_paths(const char *path1, const char *path2);
+extern Comparison compare_paths2(const char *path1, size_t length1, const char *path2, size_t length2);
 
 /* Check if path interpretable relatively to dirfd, see openat(2) for details. */
 #define AT_FD(dirfd, path) ((dirfd) != AT_FDCWD && ((path) != NULL && (path)[0] != '/'))

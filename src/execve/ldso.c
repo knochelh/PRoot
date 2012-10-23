@@ -22,38 +22,53 @@
 
 #include <stdbool.h> /* bool, true, false, */
 #include <string.h>  /* strlen(3), strcpy(3), strcat(3), strcmp(3), */
-#include <stdlib.h>  /* getenv(3), calloc(3), */
+#include <stdlib.h>  /* getenv(3), */
 #include <assert.h>  /* assert(3), */
 #include <errno.h>   /* ENOMEM, */
-#include <limits.h>  /* PATH_MAX, */
 #include <unistd.h>  /* close(2), */
+#include <linux/limits.h>  /* PATH_MAX, ARG_MAX, */
 
 #include "execve/ldso.h"
 #include "execve/execve.h"
-#include "execve/args.h"
 #include "execve/elf.h"
+#include "tracee/tracee.h"
+#include "tracee/array.h"
 #include "notice.h"
-#include "config.h"
 
-/* The value of LD_LIBRARY_PATH is saved at initialization time to
- * ensure host programs (the runner for instance) will not be affected
- * by the future values of LD_LIBRARY_PATH as defined in the guest
- * environment.  */
-static char *initial_ldso_paths = NULL;
-
-/* TODO: do the same for LD_PRELOAD?  */
-
-void init_module_ldso()
+/**
+ * Check if the environment @variable has the given @name.
+ */
+static inline bool is_env_name(const char *variable, const char *name)
 {
-	initial_ldso_paths = getenv("LD_LIBRARY_PATH");
-	if (!initial_ldso_paths)
-		return;
+	size_t length = strlen(name);
 
-	initial_ldso_paths = strdup(initial_ldso_paths);
-	if (!initial_ldso_paths)  {
-		notice(WARNING, SYSTEM, "can't allocate memory");
-		return;
-	}
+	return (variable[0] == name[0]
+		&& length < strlen(variable)
+		&& variable[length] == '='
+		&& strncmp(variable, name, length) == 0);
+}
+
+/**
+ * This function returns 1 or 0 depending on the equivalence of the
+ * @reference environment variable and the one pointed to by the entry
+ * in @array at the given @index, otherwise it returns -errno when an
+ * error occured.
+ */
+int compare_item_env(Array *array, size_t index, const char *reference)
+{
+	char *value;
+	int status;
+
+	assert(index < array->length);
+
+	status = read_item_string(array, index, &value);
+	if (status < 0)
+		return status;
+
+	if (value == NULL)
+		return 0;
+
+	return (int)is_env_name(value, reference);
 }
 
 /**
@@ -80,66 +95,76 @@ void init_module_ldso()
  * or when LD_LIBRARY_PATH was also specified by the user:
  *
  *     env LD_LIBRARY_PATH=... qemu -E LD_LIBRARY_PATH=... /bin/ls
+ *
+ * This funtion returns -errno if an error occured, otherwise 0.
  */
-bool ldso_env_passthru(char **envp[], char **argv[], const char *define, const char *undefine)
+int ldso_env_passthru(Array *envp, Array *argv, const char *define, const char *undefine)
 {
-	int i;
 	bool has_seen_library_path = false;
+	int status;
+	int i;
 
-	for (i = 0; (*envp)[i] != NULL; i++) {
+	for (i = 0; i < envp->length; i++) {
 		bool is_known = false;
+		char *env;
+
+		status = read_item_string(envp, i, &env);
+		if (status < 0)
+			return status;
 
 		/* Skip variables that do not start with "LD_".  */
-		if (   (*envp)[i][0] != 'L'
-		    || (*envp)[i][1] != 'D'
-		    || (*envp)[i][2] != '_')
+		if (env == NULL || strncmp(env, "LD_", sizeof("LD_") - 1) != 0)
 			continue;
 
-		bool passthru(const char *name) {
-			if (!check_env_entry_name((*envp)[i], name))
-				return false;
+#define PASSTHRU(check, name)						\
+		if (is_env_name(env, name)) {				\
+			check |= true;					\
+			/* Errors are not fatal here.  */		\
+			status = resize_array(argv, 1, 2);		\
+			if (status >= 0) {				\
+				status = write_items(argv, 1, 2, define, env); \
+				if (status < 0)				\
+					return status;			\
+			}						\
+			write_item(envp, i, "");			\
+			continue;					\
+		}							\
 
-			/* Errors are not fatal here.  */
-			push_args(false, argv, 2, define, (*envp)[i]);
-			replace_env_entry(&(*envp)[i], NULL);
-			return true;
-		}
-
-		has_seen_library_path |= passthru("LD_LIBRARY_PATH");
-		is_known |= passthru("LD_PRELOAD");
-		is_known |= passthru("LD_BIND_NOW");
-		is_known |= passthru("LD_TRACE_LOADED_OBJECTS");
-		is_known |= passthru("LD_AOUT_LIBRARY_PATH");
-		is_known |= passthru("LD_AOUT_PRELOAD");
-		is_known |= passthru("LD_AUDIT");
-		is_known |= passthru("LD_BIND_NOT");
-		is_known |= passthru("LD_DEBUG");
-		is_known |= passthru("LD_DEBUG_OUTPUT");
-		is_known |= passthru("LD_DYNAMIC_WEAK");
-		is_known |= passthru("LD_HWCAP_MASK");
-		is_known |= passthru("LD_KEEPDIR");
-		is_known |= passthru("LD_NOWARN");
-		is_known |= passthru("LD_ORIGIN_PATH");
-		is_known |= passthru("LD_POINTER_GUARD");
-		is_known |= passthru("LD_PROFILE");
-		is_known |= passthru("LD_PROFILE_OUTPUT");
-		is_known |= passthru("LD_SHOW_AUXV");
-		is_known |= passthru("LD_USE_LOAD_BIAS");
-		is_known |= passthru("LD_VERBOSE");
-		is_known |= passthru("LD_WARN");
-
-		if (!is_known && config.verbose_level >= 1)
-			notice(WARNING, INTERNAL, "unknown LD_ environment variable");
+		PASSTHRU(has_seen_library_path, "LD_LIBRARY_PATH");
+		PASSTHRU(is_known, "LD_PRELOAD");
+		PASSTHRU(is_known, "LD_BIND_NOW");
+		PASSTHRU(is_known, "LD_TRACE_LOADED_OBJECTS");
+		PASSTHRU(is_known, "LD_AOUT_LIBRARY_PATH");
+		PASSTHRU(is_known, "LD_AOUT_PRELOAD");
+		PASSTHRU(is_known, "LD_AUDIT");
+		PASSTHRU(is_known, "LD_BIND_NOT");
+		PASSTHRU(is_known, "LD_DEBUG");
+		PASSTHRU(is_known, "LD_DEBUG_OUTPUT");
+		PASSTHRU(is_known, "LD_DYNAMIC_WEAK");
+		PASSTHRU(is_known, "LD_HWCAP_MASK");
+		PASSTHRU(is_known, "LD_KEEPDIR");
+		PASSTHRU(is_known, "LD_NOWARN");
+		PASSTHRU(is_known, "LD_ORIGIN_PATH");
+		PASSTHRU(is_known, "LD_POINTER_GUARD");
+		PASSTHRU(is_known, "LD_PROFILE");
+		PASSTHRU(is_known, "LD_PROFILE_OUTPUT");
+		PASSTHRU(is_known, "LD_SHOW_AUXV");
+		PASSTHRU(is_known, "LD_USE_LOAD_BIAS");
+		PASSTHRU(is_known, "LD_VERBOSE");
+		PASSTHRU(is_known, "LD_WARN");
 	}
 
 	if (!has_seen_library_path) {
 		/* Errors are not fatal here.  */
-		push_args(false, argv, 2, undefine, "LD_LIBRARY_PATH");
+		status = resize_array(argv, 1, 2);
+		if (status >= 0) {
+			status = write_items(argv, 1, 2, undefine, "LD_LIBRARY_PATH");
+			if (status < 0)
+				return status;
+		}
 	}
 
-	/* Return always true since LD_LIBRARY_PATH and LD_PRELOAD are
-	 * always changed.  */
-	return true;
+	return 0;
 }
 
 /**
@@ -163,7 +188,7 @@ static int add_host_ldso_paths(char host_ldso_paths[ARG_MAX], const char *paths)
 
 		length1 = 1 + length2;
 		if (is_absolute)
-			length1 += strlen(config.host_rootfs);
+			length1 += strlen(HOST_ROOTFS);
 
 		/* Check there's enough room.  */
 		if (cursor1 + length1 >= host_ldso_paths + ARG_MAX)
@@ -178,11 +203,11 @@ static int add_host_ldso_paths(char host_ldso_paths[ARG_MAX], const char *paths)
 		 * QEMUlated environment, we have to access its
 		 * library paths through the "host-rootfs" binding.
 		 * Technically it means a path like "/lib" is accessed
-		 * as "${host_rootfs}/lib" to avoid conflict with the
+		 * as "${HOST_ROOTFS}/lib" to avoid conflict with the
 		 * guest "/lib".  */
 		if (is_absolute) {
-			strcpy(cursor1, config.host_rootfs);
-			cursor1 += strlen(config.host_rootfs);
+			strcpy(cursor1, HOST_ROOTFS);
+			cursor1 += strlen(HOST_ROOTFS);
 		}
 
 		strncpy(cursor1, cursor2, length2);
@@ -202,55 +227,55 @@ static int add_host_ldso_paths(char host_ldso_paths[ARG_MAX], const char *paths)
  * This function returns -errno if an error occured, 1 if
  * RPATH/RUNPATH entries were found, 0 otherwise.
  */
-int rebuild_host_ldso_paths(const char t_program[PATH_MAX], char **envp[])
+int rebuild_host_ldso_paths(const Tracee *tracee, const char t_program[PATH_MAX], Array *envp)
 {
-	union elf_header elf_header;
+	static char *initial_ldso_paths = NULL;
+	ElfHeader elf_header;
 
 	char host_ldso_paths[ARG_MAX] = "";
 	bool inhibit_rpath = false;
 
-	char **env_entry = NULL;
 	char *rpaths   = NULL;
 	char *runpaths = NULL;
 
+	size_t length1;
+	size_t length2;
+
 	int status;
+	int index;
 	int fd;
 
 	fd = open_elf(t_program, &elf_header);
 	if (fd < 0)
 		return fd;
 
-	status = read_ldso_rpaths(fd, &elf_header, &rpaths, &runpaths);
+	status = read_ldso_rpaths(tracee, fd, &elf_header, &rpaths, &runpaths);
+	close(fd);
 	if (status < 0)
-		goto end;
+		return status;
 
 	/* 1. DT_RPATH  */
 	if (rpaths && !runpaths) {
 		status = add_host_ldso_paths(host_ldso_paths, rpaths);
-		if (status < 0) {
-			status = 0; /* Not fatal.  */
-			goto end;
-		}
+		if (status < 0)
+			return 0; /* Not fatal.  */
 		inhibit_rpath = true;
 	}
 
-
 	/* 2. LD_LIBRARY_PATH  */
-	if (initial_ldso_paths) {
+	if (initial_ldso_paths == NULL)
+		initial_ldso_paths = strdup(getenv("LD_LIBRARY_PATH") ?: "/");
+	if (initial_ldso_paths != NULL && initial_ldso_paths[0] != '\0') {
 		status = add_host_ldso_paths(host_ldso_paths, initial_ldso_paths);
-		if (status < 0) {
-			status = 0; /* Not fatal.  */
-			goto end;
-		}
+		if (status < 0)
+			return 0; /* Not fatal.  */
 	}
 
 	/* 3. DT_RUNPATH  */
 	if (runpaths) {
 		status = add_host_ldso_paths(host_ldso_paths, runpaths);
-		if (status < 0) {
-			status = 0; /* Not fatal.  */
-			goto end;
-		}
+		if (status < 0)
+			return 0; /* Not fatal.  */
 		inhibit_rpath = true;
 	}
 
@@ -260,38 +285,43 @@ int rebuild_host_ldso_paths(const char t_program[PATH_MAX], char **envp[])
 	/* 6. /lib, /usr/lib + /usr/local/lib  */
 	if (IS_CLASS32(elf_header))
 		status = add_host_ldso_paths(host_ldso_paths,
+#if defined(ARCH_X86) || defined(ARCH_X86_64)
+					"/lib/i386-linux-gnu:/usr/lib/i386-linux-gnu:"
+#endif
 					"/lib32:/usr/lib32:/usr/local/lib32"
 					":/lib:/usr/lib:/usr/local/lib");
 	else
 		status = add_host_ldso_paths(host_ldso_paths,
+#if defined(ARCH_X86_64)
+					"/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:"
+#endif
 					"/lib64:/usr/lib64:/usr/local/lib64"
 					":/lib:/usr/lib:/usr/local/lib");
-	if (status < 0) {
-		status = 0; /* Not fatal.  */
-		goto end;
+	if (status < 0)
+		return 0; /* Not fatal.  */
+
+	index = find_item(envp, "LD_LIBRARY_PATH");
+	if (index < 0)
+		return 0; /* Not fatal.  */
+
+	/* Allocate a new entry at the end of envp[] if
+	 * LD_LIBRARY_PATH was not found.  */
+	if (index == envp->length) {
+		index = envp->length - 1;
+		resize_array(envp, envp->length - 1, 1);
 	}
 
-	/* Search if there's a LD_LIBRARY_PATH variable. */
-	env_entry = get_env_entry(*envp, "LD_LIBRARY_PATH");
+	/* Forge the new LD_LIBRARY_PATH variable from
+	 * host_ldso_paths.  */
+	length1 = strlen("LD_LIBRARY_PATH=");
+	length2 = strlen(host_ldso_paths);
+	if (ARG_MAX - length2 - 1 < length1)
+		return 0; /* Not fatal.  */
 
-	/* Errors are not fatal here either.  */
-	if (env_entry != NULL)
-		replace_env_entry(env_entry, host_ldso_paths);
-	else
-		new_env_entry(envp, "LD_LIBRARY_PATH", host_ldso_paths);
+	memmove(host_ldso_paths + length1, host_ldso_paths, length2 + 1);
+	memcpy(host_ldso_paths, "LD_LIBRARY_PATH=" , length1);
 
-end:
-	close(fd);
-
-	if (rpaths)
-		free(rpaths);
-
-	if (runpaths)
-		free(runpaths);
-
-	/* Delayed error handling.  */
-	if (status < 0)
-		return status;
+	write_item(envp, index, host_ldso_paths);
 
 	return (int) inhibit_rpath;
 }

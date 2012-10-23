@@ -5,34 +5,11 @@
 Short term
 ==========
 
-* Handle /proc/<pid>/(cmdline|cwd|root) where <pid> is a process traced by
-  PRoot (i.e not only "self").
+* Allow per tracee dynamic reconfiguration:
 
-  * for /proc/<pid>/cwd: the detranslation isn't a state machine,
-    hence it doesn't know how to detranslate correctly when there are
-    several bindings with the same host-side::
+  * ``mount --bind`` under PRoot
 
-      $ proot -w /a -m /tmp:/a -m /tmp:/b ../tests/rootfs /bin/pwd
-      /b
-
-      $ proot -w /a -m /tmp:/b -m /tmp:/a ../tests/rootfs /bin/pwd
-      /a
-
-  * for /proc/<pid>/root: allow one root per tracee, then add support
-    for the chroot syscall under PRoot.
-
-* Emulate stat/getdents-like syscalls for "dummy" path that can't be created.
-
-  It should fix this kind of scenario::
-
-      host$ proot -m /etc:/does_not_exist/etc /
-      proot warning: can't create the binding location "/does_not_exist/etc": [...]
-
-      guest$ cd /does_not_exist/etc
-      sh: cd: /does_not_exist/etc: No such file or directory
-
-* A host program that launches a guest program shouldn't propagate its
-  host LD_LIBRARY_PATH environment variable.
+  * ``chroot`` under PRoot
 
 
 Middle term
@@ -44,13 +21,23 @@ Middle term
 
     * Remove most of string copy.
 
-* Emulate *at syscalls with non-*at equivalents to allow the execution
-  of guest programs that might be too recent compared to the host
-  system.
-
 * Add support for a special environment variable to add paths
   dynamically to the host LD_LIBRARY_PATH
   ("EXTRA_HOST_LD_LIBRARY_PATH").
+
+* A host program that launches a guest program shouldn't propagate its
+  host LD_LIBRARY_PATH environment variable.
+
+* Add a "blind" mode where:
+
+  * unreadable executable can be executed::
+
+    proot mount: OK (rwsr-xr-x)
+    proot ping: failed (rws--x--x)
+
+  * unreadable directory can be accessed
+
+* Make the test-suite more portable (ARM/SH4)
 
 
 Not yet scheduled
@@ -59,11 +46,40 @@ Not yet scheduled
 Fixes
 -----
 
+* Fix path comparison: /foo and /foo/. are equal.
+
+* Forbid rename/unlink on a mount point:
+
+    $ mv mount_point elsewhere
+    mv: cannot move "mount_point" to "elsewhere": Device or resource busy
+
 * Fix the feature "attach on-the-fly"
 
 * Fix support for runners that do execve()
 
 * Add support for the string $ORIGIN (or equivalently ${ORIGIN}) in an rpath specification
+
+* Add support for /etc/ld.so.preload and /etc/ld.so.conf[.d] in mixed-mode.
+
+* Fix ``proot -k 1.2.3 proot -k 2.4.6 -k 3.4.5 uname -r | grep 3.4.5``.
+
+* Don't use the same prefix for glued path::
+
+      $ proot -b /etc/fstab -b /bin/readdir:/bin/readdir -r /tmp/empty-rootfs
+      [...]
+      proot info: binding = /tmp/proot-6738-CMr1hE:/bin
+      proot info: binding = /tmp/proot-6738-CMr1hE:/etc
+      [...]
+      $ readdir /bin
+      DT_DIR  ..
+      DT_DIR  .
+      DT_REG  readdir
+      DT_REG  fstab
+      $ readdir /etc
+      DT_DIR  ..
+      DT_DIR  .
+      DT_REG  readdir
+      DT_REG  fstab
 
 
 Features
@@ -84,9 +100,12 @@ Features
 
 * Emulate ptrace() so as to allow a ptraced GDB on another ptraced process.
 
-* Add two new options: --user-id & --group-id, and make -0 an alias to these options
+* Emulate get*id() and set*id() accurately when -0 is activated.
 
 * Allow a per-module verbose level
+
+* Emulate getdents in order to glue the "fake" branches with their
+  parent directories, c.f. create_missing_components().
 
 
 Documentation
@@ -132,20 +151,11 @@ Completeness
 Performance
 -----------
 
-* Use one PTRACE_[GS]ETREGS instead of several PTRACE_P*K*USER.
+* prefetch_mem(): cache write-through memory access (read_string, fetch_args).
 
-* Use process_vm_read/write instead of /proc/<pid>/mem or PTRACE_P*K*DATA.
+* push_array(): use 1 iovec for the array + 1 iovec per item.
 
-    * Fallback to /proc/<pid>/mem if these two syscalls aren't available.
-
-* Don't move the stack pointer, use a pointer in the struct tracee_info
-
-* Don't canonicalize if the path translation is delayed
-
-    In translate_path(): we don't use the result of the
-    canonicalization if the translation is delayed.  This point
-    depends actually on the input path, so why I don't detect sooner
-    that the canonicalization is useless?
+* Fallback to /proc/<pid>/mem when process_vm_readv() isn't available.
 
 * Add a "multi-process" mode where there's one fork of PRoot per monitored process.
 

@@ -6,8 +6,8 @@
 ``chroot``, ``mount --bind``, and ``binfmt_misc`` without privilege/setup
 -------------------------------------------------------------------------
 
-:Date: 2012-08-26
-:Version: 2.0.1
+:Date: 2012-08-15
+:Version: 2.2
 :Manual section: 1
 
 
@@ -23,11 +23,13 @@ Description
 PRoot is a user-space implementation of ``chroot``, ``mount --bind``,
 and ``binfmt_misc``.  This means that users don't need any privilege
 or setup to do things like: using an arbitrary directory as the new
-root file-system or making files accessible somewhere else in the
-file-system hierarchy or executing programs built for another CPU
-architecture transparently through QEMU user-mode.  Technically PRoot
-relies on ``ptrace``, an unprivileged system-call available in every
-Linux kernel.
+root filesystem, making files accessible somewhere else in the
+filesystem hierarchy, or executing programs built for another CPU
+architecture transparently through QEMU user-mode.  Also, developers
+can add their own features or use PRoot as a Linux process
+instrumentation engine thanks to its extension mechanism.  Technically
+PRoot relies on ``ptrace``, an unprivileged system-call available in
+every Linux kernel.
 
 The new root file-system, a.k.a *guest rootfs*, typically contains a
 Linux distribution.  By default PRoot confines the execution of
@@ -86,8 +88,7 @@ Regular options
     accessible in the confined environment just as if it were part of
     the guest rootfs.  By default the host path is bound to the same
     path in the guest rootfs but users can specify any other location
-    with the syntax: ``-b *host_path*:*guest_location*``. Such
-    bindings are said "asymmetric".
+    with the syntax: ``-b *host_path*:*guest_location*``.
 
 -q command, --qemu=command
     Execute guest programs through QEMU as specified by *command*.
@@ -102,46 +103,11 @@ Regular options
     This option is automatically enabled by the ``-Q`` option.
 
 -w path, --pwd=path, --cwd=path
-    Set the initial working directory to *path*, default is ``/``.
+    Set the initial working directory to *path*.
 
     Some programs expect to be launched from a given directory but do
-    not perform any ``chdir`` by themselves, the most common example
-    is ``./configure`` scripts.  This option avoids the need for
-    running a shell and then entering the directory manually.
-
-    See the ``-W`` option.
-
--u, --allow-unknown-syscalls
-    Allow the execution of unknown syscalls.
-
-    PRoot has to know the semantics of a syscall to translate its
-    arguments. This is why any syscall that PRoot isn't aware of is
-    blocked.  This option disables this default behavior.
-
--k string, --kernel-release=string
-    Force syscall ``uname`` to report *string* as kernel release.
-
-    Technically the GNU C library relies on syscalls provided by the
-    kernel that's why it performs a sanity check at each program
-    start-up to verify whether the current kernel is known to be
-    compatible.  If users are running a GNU C library that expects a
-    kernel more recent than the one used on their computers, they will
-    get the error "FATAL: kernel too old".  This option allows users
-    to cheat this sanity check by faking the release number of the
-    current kernel.  This option should be used with care since it
-    does not improve the compatibility.
-
--0, --root-id
-    Force some syscalls to behave as if executed by "root".
-
-    Some programs will refuse to work if they are not run with "root"
-    privileges, even if there is no technical reason for that.  This
-    is typically the case with package managers.  This option allows
-    users to bypass this kind of limitation by faking the user/group
-    identity, and by faking the success of some operations like
-    changing the ownership of files, changing the root directory to
-    ``/``, ...  Note that this option is quite limited compared to
-    ``fakeroot``.
+    not perform any ``chdir`` by themselves.  This option avoids the
+    need for running a shell and then entering the directory manually.
 
 -v value, --verbose=value
     Set the level of debug information to *value*.
@@ -155,6 +121,36 @@ Regular options
 
 -h, --help, --usage
     Print the version and the command-line usage, then exit.
+
+
+Extension options
+-----------------
+
+The following options enable built-in extensions.  Technically
+developers can add their own features to PRoot or use it as a Linux
+process instrumentation engine thanks to its extension mechanism, see
+the sources for further details.
+
+-k string, --kernel-release=string
+    Set the kernel release and compatibility level to *string*.
+
+    If a program is run on a kernel older than the one expected by its
+    GNU C library, the following error is reported: "FATAL: kernel too
+    old".  To be able to run such programs, PRoot can emulate some of
+    the syscalls that are available in the kernel release specified by
+    *string* but that are missing in the current kernel.
+
+-0, --root-id
+    Force some syscalls to behave as if executed by "root".
+
+    Some programs will refuse to work if they are not run with "root"
+    privileges, even if there is no technical reason for that.  This
+    is typically the case with package managers.  This option allows
+    users to bypass this kind of limitation by faking the user/group
+    identity, and by faking the success of some operations like
+    changing the ownership of files, changing the root directory to
+    ``/``, ...  Note that this option is quite limited compared to
+    ``fakeroot``.
 
 
 Alias options
@@ -183,6 +179,7 @@ The following options are aliases for handy sets of options.
     * /etc/nsswitch.conf
     * /etc/resolv.conf
     * /etc/localtime
+    * /run/
     * /dev/
     * /sys/
     * /proc/
@@ -194,14 +191,6 @@ The following options are aliases for handy sets of options.
 
     This option is highly recommended when using QEMU user-mode; it
     enables all the recommended bindings.
-
--W
-    Alias: ``-b . -w .``
-
-    Make the current working directory accessible in the guest rootfs
-    and then use it as the initial working directory.  This option is
-    typically useful to launch ``./configure`` scripts directly, for
-    instance.
 
 
 Exit Status
@@ -254,10 +243,9 @@ is::
 ``mount --bind`` equivalent
 ---------------------------
 
-The default rootfs is ``/`` when none is specified, this permits to
-use the bind mechanism to relocate host files and directories.  This
-is typically useful to cheat programs that perform access to
-hard-coded locations, like some installation scripts::
+The bind mechanism permits to relocate files and directories.  This is
+typically useful to cheat programs that perform access to hard-coded
+locations, like some installation scripts::
 
     proot -b /tmp/alternate_opt:/opt
     
@@ -289,7 +277,7 @@ files, for instance the DNS setting::
 ``chroot`` + ``mount --bind`` equivalent
 ----------------------------------------
 
-The option ``-b``, short for ``--bind``, makes any file from the host
+The two features above can be combined to make any file from the host
 rootfs accessible in the confined environment just as if it were
 initially part of the guest rootfs.  It is sometimes required to run
 programs that rely on some specific files::
@@ -418,7 +406,7 @@ required when PRoot is used as a ``mount --bind`` equivalent only.
 
 * Slackware, Arch, Fedora for ARM:
 
-  * ftp://ftp.armedslack.org/armedslack/armedslack-devtools/minirootfs/
+  * ftp://ftp.armedslack.org/slackwarearm/slackwarearm-devtools/minirootfs/roots/
   * http://archlinuxarm.org/developers/downloads
   * http://ftp.linux.org.uk/pub/linux/arm/fedora/rootfs/
 

@@ -25,13 +25,17 @@
 
 #include <limits.h>    /* PATH_MAX, */
 #include <sys/types.h> /* pid_t, size_t, */
+#include <sys/uio.h>   /* struct iovec, */
 
 #include "arch.h" /* word_t, */
-#include "tracee/info.h"
+#include "tracee/tracee.h"
 
-extern word_t resize_tracee_stack(struct tracee_info *tracee, ssize_t size);
-extern int copy_to_tracee(struct tracee_info *tracee, word_t dest_tracee, const void *src_tracer, word_t size);
-extern int copy_from_tracee(struct tracee_info *tracee, void *dest_tracer, word_t src_tracee, word_t size);
-extern int get_tracee_string(struct tracee_info *tracee, void *dest_tracer, word_t src_tracee, word_t max_size);
+extern int write_data(const Tracee *tracee, word_t dest_tracee, const void *src_tracer, word_t size);
+extern int writev_data(const Tracee *tracee, word_t dest_tracee, const struct iovec *src_tracer, int src_tracer_count);
+extern int read_data(const Tracee *tracee, void *dest_tracer, word_t src_tracee, word_t size);
+extern int read_string(const Tracee *tracee, char *dest_tracer, word_t src_tracee, word_t max_size);
+extern word_t peek_mem(const Tracee *tracee, word_t address);
+extern void poke_mem(const Tracee *tracee, word_t address, word_t value);
+extern word_t alloc_mem(Tracee *tracee, ssize_t size);
 
 #endif /* TRACEE_MEM_H */

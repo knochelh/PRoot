@@ -25,7 +25,7 @@
 
 #include <stdlib.h>
 #include "addons/syscall_addons.h"
-#include "tracee/info.h"
+#include "tracee/tracee.h"
 
 /**
  * Current list of active addons.
@@ -38,7 +38,7 @@ struct addon_info *addons_list;
  * Activated only if ENABLE_ADDONS is defined.
  * Return value is the status in case of addons error or bad arguments.
  */
-int syscall_addons_enter(struct tracee_info *tracee)
+int syscall_addons_enter(Tracee *tracee)
 {
 	int status = 0;
 	struct addon_info *current = addons_list;
@@ -55,7 +55,7 @@ int syscall_addons_enter(struct tracee_info *tracee)
  * Activated only if ENABLE_ADDONS is defined.
  * Return value is the status in case of addons error.
  */
-int syscall_addons_exit(struct tracee_info *tracee)
+int syscall_addons_exit(Tracee *tracee)
 {
 	int process_current_exit(struct addon_info *current)
 	{
@@ -83,7 +83,7 @@ int syscall_addons_exit(struct tracee_info *tracee)
  * Also, if a procexit() addon function returns a status < 0
  * other procexit addons are skipped.
  */
-int syscall_addons_procexit(struct tracee_info *tracee)
+int syscall_addons_procexit(Tracee *tracee)
 {
 	int status = 0;
 	struct addon_info *current = addons_list;
@@ -99,7 +99,7 @@ int syscall_addons_procexit(struct tracee_info *tracee)
  * Activated only if ENABLE_ADDONS is defined.
  * Return value is the status in case of addons error or bad arguments.
  */
-int syscall_addons_canon_host_enter(struct tracee_info *tracee, char *real_path)
+int syscall_addons_canon_host_enter(Tracee *tracee, char *real_path)
 {
 	int status = 0;
 	struct addon_info *current = addons_list;

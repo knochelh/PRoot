@@ -20,7 +20,7 @@
  * 02110-1301 USA.
  */
 
-switch (tracee->sysnum) {
+switch (peek_reg(tracee, CURRENT, SYSARG_NUM)) {
 case PR__llseek:
 case PR__newselect:
 case PR__sysctl:
@@ -67,7 +67,6 @@ case PR_fadvise64_64:
 case PR_fallocate:
 case PR_fanotify_init:
 case PR_fanotify_mark:
-case PR_fchdir:
 case PR_fchmod:
 case PR_fchown:
 case PR_fchown32:
@@ -351,10 +350,8 @@ case PR_ARM_set_tls:
 case PR_ARM_usr26:
 case PR_ARM_usr32:
 case PR_arm_fadvise64_64:
-#if PR_arm_sync_file_range != PR_sync_file_range2
 case PR_arm_sync_file_range:
 #endif
-#endif /*  */
 
 	/* Nothing to do. */
 	status = 0;
@@ -362,31 +359,90 @@ case PR_arm_sync_file_range:
 
 case PR_execve:
 	status = translate_execve(tracee);
-
-	/* The stack is already saved/restored before/after an
-	 * execve() for this architecture, look at this code:
-	 * linux/arch/x86/kernel/entry_64.S:stub_execve */
-#if defined(ARCH_X86_64)
-	if (status > 0)
-		status = 0;
-#endif
 	break;
+
+case PR_fchdir:
+case PR_chdir: {
+	char *tmp;
+
+	if (peek_reg(tracee, CURRENT, SYSARG_NUM) == PR_chdir) {
+		status = get_sysarg_path(tracee, path, SYSARG_1);
+		if (status < 0)
+			break;
+
+		/* The ending "." ensures canonicalize() will report
+		 * an error if path does not exist or if it is not a
+		 * directory.  */
+		if (path[0] != '/')
+			status = join_paths(3, newpath, tracee->fs->cwd, path, ".");
+		else
+			status = join_paths(2, newpath, path, ".");
+		if (status < 0)
+			break;
+
+		/* Initiale state for canonicalization.  */
+		strcpy(path, "/");
+
+		status = canonicalize(tracee, newpath, true, path, 0);
+		if (status < 0)
+			break;
+	}
+	else {
+		dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+
+		/* Sadly this method doesn't detranslate statefully,
+		 * this means that there's an ambiguity when several
+		 * bindings are from the same host path:
+		 *
+		 *    $ proot -m /tmp:/a -m /tmp:/b fchdir_getcwd /a
+		 *    /b
+		 *
+		 *    $ proot -m /tmp:/b -m /tmp:/a fchdir_getcwd /a
+		 *    /a
+		 *
+		 * A solution would be to follow each file descriptor
+		 * just like it is done for cwd.
+		 */
+
+		status = translate_path(tracee, path, dirfd, ".", true);
+		if (status < 0)
+			break;
+
+		status = detranslate_path(tracee, path, NULL);
+		if (status < 0)
+			break;
+	}
+
+	/* Remove the trailing "/" or "/.".  */
+	chop_finality(path);
+
+	tmp = talloc_strdup(tracee->fs, path);
+	if (tmp == NULL) {
+		status = -ENOMEM;
+		break;
+	}
+	TALLOC_FREE(tracee->fs->cwd);
+
+	tracee->fs->cwd = tmp;
+	talloc_set_name_const(tracee->fs->cwd, "$cwd");
+
+	poke_reg(tracee, SYSARG_NUM, SYSCALL_AVOIDER);
+	status = 0;
+	break;
+}
 
 case PR_access:
 case PR_acct:
-case PR_chdir:
 case PR_chmod:
 case PR_chown:
 case PR_chown32:
 case PR_chroot:
 case PR_getxattr:
 case PR_listxattr:
-case PR_mkdir:
 case PR_mknod:
 case PR_oldstat:
 case PR_creat:
 case PR_removexattr:
-case PR_rmdir:
 case PR_setxattr:
 case PR_stat:
 case PR_stat64:
@@ -405,11 +461,7 @@ case PR_utimes:
 	break;
 
 case PR_open:
-	flags = peek_ureg(tracee, SYSARG_2);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	flags = peek_reg(tracee, CURRENT, SYSARG_2);
 
 	if (   ((flags & O_NOFOLLOW) != 0)
 	       || ((flags & O_EXCL) != 0 && (flags & O_CREAT) != 0))
@@ -425,23 +477,16 @@ case PR_fstatat64:
 case PR_newfstatat:
 case PR_utimensat:
 case PR_name_to_handle_at:
-	dirfd = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
 
 	status = get_sysarg_path(tracee, path, SYSARG_2);
 	if (status < 0)
 		break;
 
-	flags = (tracee->sysnum == PR_fchownat || tracee->sysnum == PR_name_to_handle_at)
-		? peek_ureg(tracee, SYSARG_5)
-		: peek_ureg(tracee, SYSARG_4);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	flags = (   peek_reg(tracee, CURRENT, SYSARG_NUM) == PR_fchownat
+		 || peek_reg(tracee, CURRENT, SYSARG_NUM) == PR_name_to_handle_at)
+		? peek_reg(tracee, CURRENT, SYSARG_5)
+		: peek_reg(tracee, CURRENT, SYSARG_4);
 
 	if ((flags & AT_SYMLINK_NOFOLLOW) != 0)
 		status = translate_path2(tracee, dirfd, path, SYSARG_2, SYMLINK);
@@ -450,13 +495,8 @@ case PR_name_to_handle_at:
 	break;
 
 case PR_futimesat:
-case PR_mkdirat:
 case PR_mknodat:
-	dirfd = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
 
 	status = get_sysarg_path(tracee, path, SYSARG_2);
 	if (status < 0)
@@ -466,11 +506,7 @@ case PR_mknodat:
 	break;
 
 case PR_inotify_add_watch:
-	flags = peek_ureg(tracee, SYSARG_3);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	flags = peek_reg(tracee, CURRENT, SYSARG_3);
 
 	if ((flags & IN_DONT_FOLLOW) != 0)
 		status = translate_sysarg(tracee, SYSARG_2, SYMLINK);
@@ -489,69 +525,40 @@ case PR_lstat64:
 case PR_oldlstat:
 case PR_unlink:
 case PR_readlink:
+case PR_rmdir:
+case PR_mkdir:
 	status = translate_sysarg(tracee, SYSARG_1, SYMLINK);
 	break;
 
-case PR_link:
 case PR_pivot_root:
-	status1 = translate_sysarg(tracee, SYSARG_1, REGULAR);
-	status2 = translate_sysarg(tracee, SYSARG_2, REGULAR);
-	if (status1 < 0) {
-		status = status1;
+	status = translate_sysarg(tracee, SYSARG_1, REGULAR);
+	if (status < 0)
 		break;
-	}
-	if (status2 < 0) {
-		status = status2;
-		break;
-	}
-	status = status1 + status2;
+
+	status = translate_sysarg(tracee, SYSARG_2, REGULAR);
 	break;
 
 case PR_linkat:
-	olddirfd = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	olddirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+	newdirfd = peek_reg(tracee, CURRENT, SYSARG_3);
+	flags    = peek_reg(tracee, CURRENT, SYSARG_5);
 
-	newdirfd = peek_ureg(tracee, SYSARG_3);
-	if (errno != 0) {
-		status = -errno;
+	status = get_sysarg_path(tracee, oldpath, SYSARG_2);
+	if (status < 0)
 		break;
-	}
 
-	flags    = peek_ureg(tracee, SYSARG_5);
-	if (errno != 0) {
-		status = -errno;
+	status = get_sysarg_path(tracee, newpath, SYSARG_4);
+	if (status < 0)
 		break;
-	}
-
-	status1 = get_sysarg_path(tracee, oldpath, SYSARG_2);
-	status2 = get_sysarg_path(tracee, newpath, SYSARG_4);
-	if (status1 < 0) {
-		status = status1;
-		break;
-	}
-	if (status2 < 0) {
-		status = status2;
-		break;
-	}
 
 	if ((flags & AT_SYMLINK_FOLLOW) != 0)
-		status1 = translate_path2(tracee, olddirfd, oldpath, SYSARG_2, REGULAR);
+		status = translate_path2(tracee, olddirfd, oldpath, SYSARG_2, REGULAR);
 	else
-		status1 = translate_path2(tracee, olddirfd, oldpath, SYSARG_2, SYMLINK);
-	status2 = translate_path2(tracee, newdirfd, newpath, SYSARG_4, REGULAR);
+		status = translate_path2(tracee, olddirfd, oldpath, SYSARG_2, SYMLINK);
+	if (status < 0)
+		break;
 
-	if (status1 < 0) {
-		status = status1;
-		break;
-	}
-	if (status2 < 0) {
-		status = status2;
-		break;
-	}
-	status = status1 + status2;
+	status = translate_path2(tracee, newdirfd, newpath, SYSARG_4, SYMLINK);
 	break;
 
 case PR_mount:
@@ -570,17 +577,8 @@ case PR_mount:
 	break;
 
 case PR_openat:
-	dirfd = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
-
-	flags = peek_ureg(tracee, SYSARG_3);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+	flags = peek_reg(tracee, CURRENT, SYSARG_3);
 
 	status = get_sysarg_path(tracee, path, SYSARG_2);
 	if (status < 0)
@@ -595,11 +593,8 @@ case PR_openat:
 
 case PR_unlinkat:
 case PR_readlinkat:
-	dirfd = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+case PR_mkdirat:
+	dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
 
 	status = get_sysarg_path(tracee, path, SYSARG_2);
 	if (status < 0)
@@ -608,58 +603,32 @@ case PR_readlinkat:
 	status = translate_path2(tracee, dirfd, path, SYSARG_2, SYMLINK);
 	break;
 
+case PR_link:
 case PR_rename:
-	status1 = translate_sysarg(tracee, SYSARG_1, SYMLINK);
-	status2 = translate_sysarg(tracee, SYSARG_2, SYMLINK);
-
-	if (status1 < 0) {
-		status = status1;
+	status = translate_sysarg(tracee, SYSARG_1, SYMLINK);
+	if (status < 0)
 		break;
-	}
-	if (status2 < 0) {
-		status = status2;
-		break;
-	}
-	status = status1 + status2;
 
+	status = translate_sysarg(tracee, SYSARG_2, SYMLINK);
 	break;
 
 case PR_renameat:
-	olddirfd = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	olddirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+	newdirfd = peek_reg(tracee, CURRENT, SYSARG_3);
 
-	newdirfd = peek_ureg(tracee, SYSARG_3);
-	if (errno != 0) {
-		status = -errno;
+	status = get_sysarg_path(tracee, oldpath, SYSARG_2);
+	if (status < 0)
 		break;
-	}
 
-	status1 = get_sysarg_path(tracee, oldpath, SYSARG_2);
-	status2 = get_sysarg_path(tracee, newpath, SYSARG_4);
-	if (status1 < 0) {
-		status = status1;
+	status = get_sysarg_path(tracee, newpath, SYSARG_4);
+	if (status < 0)
 		break;
-	}
-	if (status2 < 0) {
-		status = status2;
-		break;
-	}
 
-	status1 = translate_path2(tracee, olddirfd, oldpath, SYSARG_2, SYMLINK);
-	status2 = translate_path2(tracee, newdirfd, newpath, SYSARG_4, SYMLINK);
-	if (status1 < 0) {
-		status = status1;
+	status = translate_path2(tracee, olddirfd, oldpath, SYSARG_2, SYMLINK);
+	if (status < 0)
 		break;
-	}
-	if (status2 < 0) {
-		status = status2;
-		break;
-	}
 
-	status = status1 + status2;
+	status = translate_path2(tracee, newdirfd, newpath, SYSARG_4, SYMLINK);
 	break;
 
 case PR_symlink:
@@ -667,11 +636,7 @@ case PR_symlink:
 	break;
 
 case PR_symlinkat:
-	newdirfd = peek_ureg(tracee, SYSARG_2);
-	if (errno != 0) {
-		status = -errno;
-		break;
-	}
+	newdirfd = peek_reg(tracee, CURRENT, SYSARG_2);
 
 	status = get_sysarg_path(tracee, newpath, SYSARG_3);
 	if (status < 0)
@@ -681,10 +646,8 @@ case PR_symlinkat:
 	break;
 
 default:
-	notice(WARNING, INTERNAL, "unknown syscall %lu", tracee->sysnum);
-	if (!config.allow_unknown_syscalls)
-		status = -ENOSYS;
-	else
-		status = 0;
+	notice(tracee, WARNING, INTERNAL, "unknown syscall %ld",
+		peek_reg(tracee, CURRENT, SYSARG_NUM));
+	status = 0;
 	break;
 }

@@ -20,32 +20,14 @@
  * 02110-1301 USA.
  */
 
-#ifndef CONFIG_H
-#define CONFIG_H
+#ifndef TRACEE_EVENT_H
+#define TRACEE_EVENT_H
 
-#include <stdbool.h> /* bool, */
+#include <stdbool.h>
 
-struct config {
-	const char *guest_rootfs;
-	const char *host_rootfs;
-	const char *initial_cwd;
-	const char *kernel_release;
+#include "tracee/tracee.h"
 
-	char **qemu;
-	char **command;
+extern int launch_process(Tracee *tracee);
+extern int event_loop();
 
-	bool ignore_elf_interpreter;
-	bool allow_unknown_syscalls;
-	bool disable_aslr;
-	bool fake_id0;
-
-	bool check_fd;
-
-	int verbose_level;
-};
-
-extern struct config config;
-
-extern void print_config();
-
-#endif /* CONFIG_H */
+#endif /* TRACEE_EVENT_H */

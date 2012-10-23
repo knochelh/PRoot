@@ -1,4 +1,4 @@
-%define version v2.0.1
+%define version v2.2
 
 Summary   : chroot, mount --bind, and binfmt_misc without privilege/setup
 Version   : %{version}
@@ -17,11 +17,13 @@ BuildRequires: glibc-static
 PRoot is a user-space implementation of chroot, mount --bind,
 and binfmt_misc.  This means that users don't need any privilege
 or setup to do things like: using an arbitrary directory as the new
-root file-system or making files accessible somewhere else in the
-file-system hierarchy or executing programs built for another CPU
-architecture transparently through QEMU user-mode.  Technically PRoot
-relies on ptrace, an unprivileged system-call available in every
-Linux kernel.
+root filesystem, making files accessible somewhere else in the
+filesystem hierarchy, or executing programs built for another CPU
+architecture transparently through QEMU user-mode.  Also, developers
+can add their own features or use PRoot as a Linux process
+instrumentation engine thanks to its extension mechanism.  Technically
+PRoot relies on ptrace, an unprivileged system-call available in
+every Linux kernel.
 
 %prep
 %setup -n proot-%{version}

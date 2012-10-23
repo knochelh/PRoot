@@ -20,13 +20,41 @@
  * 02110-1301 USA.
  */
 
-#ifndef TRACE_H
-#define TRACE_H
+switch (peek_reg(tracee, CURRENT, SYSARG_NUM)) {
+case PR_uname: {
+	struct utsname utsname;
+	word_t address;
+	word_t result;
+	size_t size;
 
-#include <stdbool.h>
+	assert(config->release != NULL);
 
-extern bool launch_process();
-extern bool attach_process(pid_t pid);
-extern int event_loop();
+	result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 
-#endif /* TRACE_H */
+	/* Error reported by the kernel.  */
+	if ((int) result < 0)
+		return 0;
+
+	address = peek_reg(tracee, ORIGINAL, SYSARG_1);
+
+	status = read_data(tracee, &utsname, address, sizeof(utsname));
+	if (status < 0)
+		return status;
+
+	/* Note: on x86_64, we can handle the two modes (32/64) with
+	 * the same code since struct utsname as always the same
+	 * layout.  */
+	size = sizeof(utsname.release);
+	strncpy(utsname.release, config->release, size);
+	utsname.release[size - 1] = '\0';
+
+	status = write_data(tracee, address, &utsname, sizeof(utsname));
+	if (status < 0)
+		return status;
+
+	return 0;
+}
+
+default:
+	return 0;
+}

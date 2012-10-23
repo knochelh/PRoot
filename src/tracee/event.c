@@ -35,20 +35,15 @@
 #include <stdbool.h>    /* bool, true, false, */
 #include <assert.h>     /* assert(3), */
 #include <stdlib.h>     /* atexit(3), */
+#include <sys/queue.h>  /* LIST_*, */
+#include <talloc.h>     /* talloc_*, */
 
-/* Old distribs (RHEL_4) do not define these flags. */
-#ifndef PTRACE_O_TRACEEXIT
-#define PTRACE_O_TRACEEXIT 0x00000040
-#endif
-#ifndef PTRACE_EVENT_EXIT
-#define PTRACE_EVENT_EXIT 6
-#endif
-
-#include "trace.h"
+#include "tracee/event.h"
 #include "notice.h"
 #include "path/path.h"
+#include "path/binding.h"
 #include "syscall/syscall.h"
-#include "config.h"
+#include "extension/extension.h"
 
 #include "compat.h"
 
@@ -56,9 +51,12 @@
 #include "addons/syscall_addons.h"
 #endif
 
-bool launch_process()
+/**
+ * Launch the first process as specified by @tracee->cmdline[].  This
+ * function returns -errno if an error occurred, otherwise 0.
+ */
+int launch_process(Tracee *tracee)
 {
-	struct tracee_info *tracee;
 	struct rlimit rlimit;
 	long status;
 	pid_t pid;
@@ -66,18 +64,22 @@ bool launch_process()
 	pid = fork();
 	switch(pid) {
 	case -1:
-		notice(ERROR, SYSTEM, "fork()");
+		notice(tracee, ERROR, SYSTEM, "fork()");
+		return -errno;
 
 	case 0: /* child */
 		/* Declare myself as ptraceable before executing the
 		 * requested program. */
 		status = ptrace(PTRACE_TRACEME, 0, NULL, NULL);
-		if (status < 0)
-			notice(ERROR, SYSTEM, "ptrace(TRACEME)");
+		if (status < 0) {
+			notice(tracee, ERROR, SYSTEM, "ptrace(TRACEME)");
+			return -errno;
+		}
 
 		/* Warn about open file descriptors. They won't be
 		 * translated until they are closed. */
-		list_open_fd(getpid());
+		if (tracee->verbose > 0)
+			list_open_fd(tracee);
 
 		/* RHEL4 uses an ASLR mechanism that creates conflicts
 		 * between the layout of QEMU and the layout of the
@@ -85,7 +87,7 @@ bool launch_process()
 		status = personality(0xffffffff);
 		if (   status < 0
 		    || personality(status | ADDR_NO_RANDOMIZE) < 0)
-			notice(WARNING, INTERNAL, "can't disable ASLR");
+			notice(tracee, WARNING, INTERNAL, "can't disable ASLR");
 
 		/* 1. The ELF interpreter is explicitly used as a
 		 *    loader by PRoot, it means the Linux kernel
@@ -134,7 +136,7 @@ bool launch_process()
 			status = setrlimit(RLIMIT_STACK, &rlimit);
 		}
 		if (status < 0)
-			notice(WARNING, SYSTEM, "can't set the maximum stack size");
+			notice(tracee, WARNING, SYSTEM, "can't set the maximum stack size");
 
 		/* Synchronize with the tracer's event loop.  Without
 		 * this trick the tracer only sees the "return" from
@@ -143,78 +145,29 @@ bool launch_process()
 		 * does the same thing. */
 		kill(getpid(), SIGSTOP);
 
-		/* Now process is ptraced, so the current rootfs is
-		 * already the guest rootfs. */
-
-		if (config.initial_cwd) {
-			status = chdir(config.initial_cwd);
-			if (status < 0) {
-				notice(WARNING, SYSTEM, "chdir('%s/)", config.initial_cwd);
-				chdir("/");
-			}
-		}
-		else
-			chdir("/");
-
-		execvp(config.command[0], config.command);
-
-		return false;
+		/* Now process is ptraced, so the current rootfs is already the
+		 * guest rootfs.  Note: Valgrind can't handle execve(2) on
+		 * "foreign" binaries (ENOEXEC) but can handle execvp(3) on such
+		 * binaries.  */
+		execvp(tracee->exe, tracee->cmdline);
+		return -errno;
 
 	default: /* parent */
-		/* Allocate its tracee_info structure.  */
-		tracee = get_tracee_info(pid, true);
-		if (tracee == NULL)
-			return false;
-
-		/* This tracee has no traced parent.  */
-		inherit_fs_info(tracee, NULL);
-		return true;
-	}
-
-	/* Never reached.  */
-	return false;
-}
-
-bool attach_process(pid_t pid)
-{
-	long status;
-	struct tracee_info *tracee;
-
-	notice(WARNING, USER, "attaching a process on-the-fly is still experimental");
-
-	status = ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-	if (status < 0)
-		notice(ERROR, SYSTEM, "ptrace(ATTACH, %d)", pid);
-
-	/* Warn about open file descriptors. They won't be translated
-	 * until they are closed. */
-	list_open_fd(pid);
-
-	/* Allocate its tracee_info structure.  */
-	tracee = get_tracee_info(pid, true);
-	if (tracee == NULL)
-		return false;
-
-	/* This tracee has no traced parent.  */
-	inherit_fs_info(tracee, NULL);
-	return true;
-}
-
-/* Send the KILL signal to all [known] tracees.  */
-static void kill_all_tracees()
-{
-	int kill_tracee(pid_t pid)
-	{
-		kill(pid, SIGKILL);
+		/* We know the pid of the first tracee now.  */
+		tracee->pid = pid;
 		return 0;
 	}
 
-	foreach_tracee(kill_tracee);
+	/* Never reached.  */
+	return -ENOSYS;
 }
 
+/* Send the KILL signal to all tracees when PRoot has received a fatal
+ * signal.  */
 static void kill_all_tracees2(int signum, siginfo_t *siginfo, void *ucontext)
 {
-	notice(WARNING, INTERNAL, "signal %d received from process %d", signum, siginfo->si_pid);
+	notice(NULL, WARNING, INTERNAL, "signal %d received from process %d",
+		signum, siginfo->si_pid);
 	kill_all_tracees();
 
 	/* Exit immediately for system signals (segmentation fault,
@@ -224,21 +177,98 @@ static void kill_all_tracees2(int signum, siginfo_t *siginfo, void *ucontext)
 		_exit(EXIT_FAILURE);
 }
 
+/* Print on stderr the complete talloc hierarchy.  */
+static void print_talloc_hierarchy(int signum, siginfo_t *siginfo, void *ucontext)
+{
+	void print_talloc_chunk(const void *ptr, int depth, int max_depth, int is_ref, void *data)
+	{
+		const char *name;
+		size_t count;
+		size_t size;
+
+		name = talloc_get_name(ptr);
+		size = talloc_get_size(ptr);
+		count = talloc_reference_count(ptr);
+
+		if (depth == 0)
+			return;
+
+		while (depth-- > 1)
+			fprintf(stderr, "\t");
+
+		fprintf(stderr, "%-16s ", name);
+
+		if (is_ref)
+			fprintf(stderr, "-> %-8p", ptr);
+		else {
+			fprintf(stderr, "%-8p  %zd bytes  %zd ref'", ptr, size, count);
+
+			if (name[0] == '$') {
+				fprintf(stderr, "\t(\"%s\")", (char *)ptr);
+			}
+			if (name[0] == '@') {
+				char **argv;
+				int i;
+
+				fprintf(stderr, "\t(");
+				for (i = 0, argv = (char **)ptr; argv[i] != NULL; i++)
+					fprintf(stderr, "\"%s\", ", argv[i]);
+				fprintf(stderr, ")");
+			}
+			else if (strcmp(name, "Tracee") == 0) {
+				fprintf(stderr, "\t(pid = %d)", ((Tracee *)ptr)->pid);
+			}
+			else if (strcmp(name, "Bindings") == 0) {
+				 Tracee *tracee;
+
+				 tracee = TRACEE(ptr);
+
+				 if (ptr == tracee->fs->bindings.pending)
+					 fprintf(stderr, "\t(pending)");
+				 else if (ptr == tracee->fs->bindings.guest)
+					 fprintf(stderr, "\t(guest)");
+				 else if (ptr == tracee->fs->bindings.host)
+					 fprintf(stderr, "\t(host)");
+			}
+			else if (strcmp(name, "Binding") == 0) {
+				Binding *binding = (Binding *)ptr;
+				fprintf(stderr, "\t(%s:%s)", binding->host.path, binding->guest.path);
+			}
+		}
+
+		fprintf(stderr, "\n");
+	}
+
+	switch (signum) {
+	case SIGUSR1:
+		talloc_report_depth_cb(NULL, 0, 100, print_talloc_chunk, NULL);
+		break;
+
+	case SIGUSR2:
+		talloc_report_depth_file(NULL, 0, 100, stderr);
+		break;
+
+	default:
+		break;
+	}
+}
+
+/**
+ * Wait then handle any event from any tracee.  This function returns
+ * the exit status of the last terminated program.
+ */
 int event_loop()
 {
 	struct sigaction signal_action;
-	struct tracee_info *tracee;
 	int last_exit_status = -1;
-	int tracee_status;
 	long status;
 	int signum;
 	int signal;
-	pid_t pid;
 
 	/* Kill all tracees when exiting.  */
 	status = atexit(kill_all_tracees);
 	if (status != 0)
-		notice(WARNING, INTERNAL, "atexit() failed");
+		notice(NULL, WARNING, INTERNAL, "atexit() failed");
 
 	/* All signals are blocked when the signal handler is called.
 	 * SIGINFO is used to know which process has signaled us and
@@ -247,7 +277,7 @@ int event_loop()
 	signal_action.sa_flags = SA_SIGINFO | SA_RESTART;
 	status = sigfillset(&signal_action.sa_mask);
 	if (status < 0)
-		notice(WARNING, SYSTEM, "sigfillset()");
+		notice(NULL, WARNING, SYSTEM, "sigfillset()");
 
 	/* Handle all signals.  */
 	for (signum = 0; signum < SIGRTMAX; signum++) {
@@ -261,6 +291,13 @@ int event_loop()
 			 * signals.  This ensures no process is left
 			 * untraced.  */
 			signal_action.sa_sigaction = kill_all_tracees2;
+			break;
+
+		case SIGUSR1:
+		case SIGUSR2:
+			/* Print on stderr the complete talloc
+			 * hierarchy, useful for debug purpose.  */
+			signal_action.sa_sigaction = print_talloc_hierarchy;
 			break;
 
 		case SIGCHLD:
@@ -282,43 +319,48 @@ int event_loop()
 
 		status = sigaction(signum, &signal_action, NULL);
 		if (status < 0 && errno != EINVAL)
-			notice(WARNING, SYSTEM, "sigaction(%d)", signum);
+			notice(NULL, WARNING, SYSTEM, "sigaction(%d)", signum);
 	}
 
 	signal = 0;
 	while (1) {
+		int tracee_status;
+		Tracee *tracee;
+		pid_t pid;
+
 		/* Wait for the next tracee's stop. */
 		pid = waitpid(-1, &tracee_status, __WALL);
 		if (pid < 0) {
-			if (errno != ECHILD)
-				notice(ERROR, SYSTEM, "waitpid()");
-			else
-				break;
+			if (errno != ECHILD) {
+				notice(NULL, ERROR, SYSTEM, "waitpid()");
+				return EXIT_FAILURE;
+			}
+			break;
 		}
 
-		/* Check every tracee file descriptors. */
-		if (config.check_fd)
-			foreach_tracee(check_fd);
-
 		/* Get the information about this tracee. */
-		tracee = get_tracee_info(pid, true);
+		tracee = get_tracee(pid, true);
 		assert(tracee != NULL);
 
+		status = notify_extensions(tracee, NEW_STATUS, tracee_status, 0);
+		if (status != 0)
+			continue;
+
 		if (WIFEXITED(tracee_status)) {
-			VERBOSE(1, "pid %d: exited with status %d",
-			           pid, WEXITSTATUS(tracee_status));
+			VERBOSE(tracee, 1, "pid %d: exited with status %d",
+				pid, WEXITSTATUS(tracee_status));
 			last_exit_status = WEXITSTATUS(tracee_status);
-			delete_tracee(tracee);
+			TALLOC_FREE(tracee);
 			continue; /* Skip the call to ptrace(SYSCALL). */
 		}
 		else if (WIFSIGNALED(tracee_status)) {
-			VERBOSE(1, "pid %d: terminated with signal %d",
+			VERBOSE(tracee, 1, "pid %d: terminated with signal %d",
 				pid, WTERMSIG(tracee_status));
-			delete_tracee(tracee);
+			TALLOC_FREE(tracee);
 			continue; /* Skip the call to ptrace(SYSCALL). */
 		}
 		else if (WIFCONTINUED(tracee_status)) {
-			VERBOSE(1, "pid %d: continued", pid);
+			VERBOSE(tracee, 1, "pid %d: continued", pid);
 			signal = SIGCONT;
 		}
 		else if (WIFSTOPPED(tracee_status)) {
@@ -351,24 +393,27 @@ int event_loop()
 						PTRACE_O_TRACEEXEC    |
 						PTRACE_O_TRACECLONE   |
 						PTRACE_O_TRACEEXIT);
-				if (status < 0)
-					notice(ERROR, SYSTEM, "ptrace(PTRACE_SETOPTIONS)");
+				if (status < 0) {
+					notice(tracee, ERROR, SYSTEM, "ptrace(PTRACE_SETOPTIONS)");
+					return EXIT_FAILURE;
+				}
 				/* Fall through. */
 			case SIGTRAP | 0x80:
-				assert(tracee->parent != NULL);
+				assert(tracee->exe != NULL);
 				status = translate_syscall(tracee);
 				if (status < 0) {
 					/* The process died in a syscall. */
-					delete_tracee(tracee);
+					TALLOC_FREE(tracee);
 					continue; /* Skip the call to ptrace(SYSCALL). */
 				}
 				signal = 0;
 				break;
 
-			case SIGTRAP | PTRACE_EVENT_FORK  << 8:
-			case SIGTRAP | PTRACE_EVENT_VFORK << 8:
-			case SIGTRAP | PTRACE_EVENT_CLONE << 8: {
-				struct tracee_info *child_tracee;
+			case SIGTRAP | PTRACE_EVENT_VFORK << 8: {
+				/* Note: clone(2) and fork(2) are
+				 * handle in syscall/exit.c.  */
+
+				Tracee *child_tracee;
 				pid_t child_pid;
 
 				signal = 0;
@@ -376,48 +421,47 @@ int event_loop()
 				/* Get the pid of the tracee's new child.  */
 				status = ptrace(PTRACE_GETEVENTMSG, tracee->pid, NULL, &child_pid);
 				if (status < 0) {
-					notice(WARNING, SYSTEM, "ptrace(GETEVENTMSG)");
+					notice(tracee, WARNING, SYSTEM, "ptrace(GETEVENTMSG)");
 					break;
 				}
 
-				/* Declare the parent of this new tracee.  */
-				child_tracee = get_tracee_info(child_pid, true);
-				inherit_fs_info(child_tracee, tracee);
-
-				/* Restart the child tracee if it was started
-				 * before this notification event.  */
-				if (child_tracee->sigstop == SIGSTOP_PENDING) {
-					tracee->sigstop = SIGSTOP_ALLOWED;
-					status = ptrace(PTRACE_SYSCALL, child_pid, NULL, 0);
-					if (status < 0) {
-						notice(WARNING, SYSTEM, "ptrace(SYSCALL, %d) [1]", child_pid);
-						delete_tracee(tracee);
-					}
+				child_tracee = get_tracee(child_pid, true);
+				if (child_tracee == NULL) {
+					notice(tracee, WARNING, SYSTEM, "running out of memory");
+					break;
 				}
-			}
-				break;
 
+				status = inherit_config(child_tracee, tracee, false);
+				if (status < 0)
+					break;
+
+				signal = 0;
+				break;
+			}
+
+			case SIGTRAP | PTRACE_EVENT_FORK  << 8:
+			case SIGTRAP | PTRACE_EVENT_CLONE << 8:
 			case SIGTRAP | PTRACE_EVENT_EXEC  << 8:
 				signal = 0;
 				break;
 
 			case SIGTRAP | PTRACE_EVENT_EXIT  << 8:
 #ifdef ENABLE_ADDONS
-				syscall_addons_procexit(get_tracee_info(pid, false));
+				syscall_addons_procexit(get_tracee(pid, false));
 #endif
 				signal = 0;
 				break;
-			case SIGSTOP:
-				/* For each tracee, the first SIGSTOP
-				 * is only used to notify the tracer.  */
 
+			case SIGSTOP:
 				/* Stop this tracee until PRoot has received
 				 * the EVENT_*FORK|CLONE notification.  */
-				if (tracee->parent == NULL) {
+				if (tracee->exe == NULL) {
 					tracee->sigstop = SIGSTOP_PENDING;
 					continue;
 				}
 
+				/* For each tracee, the first SIGSTOP
+				 * is only used to notify the tracer.  */
 				if (tracee->sigstop == SIGSTOP_IGNORED) {
 					tracee->sigstop = SIGSTOP_ALLOWED;
 					signal = 0;
@@ -429,7 +473,7 @@ int event_loop()
 			}
 		}
 		else {
-			notice(WARNING, INTERNAL, "unknown trace event");
+			notice(tracee, WARNING, INTERNAL, "unknown trace event");
 			signal = 0;
 		}
 
@@ -438,8 +482,8 @@ int event_loop()
 		status = ptrace(PTRACE_SYSCALL, tracee->pid, NULL, signal);
 		if (status < 0) {
 			 /* The process died in a syscall.  */
-			notice(WARNING, SYSTEM, "ptrace(SYSCALL, %d) [2]", tracee->pid);
-			delete_tracee(tracee);
+			notice(tracee, WARNING, SYSTEM, "ptrace(SYSCALL, %d) [2]", tracee->pid);
+			TALLOC_FREE(tracee);
 		}
 	}
 

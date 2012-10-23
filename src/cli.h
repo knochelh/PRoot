@@ -4,26 +4,27 @@
 #define CLI_H
 
 #include <stddef.h>
+#include "tracee/tracee.h"
 #include "build.h"
 
-struct argument {
+typedef struct {
 	const char *name;
 	char separator;
 	const char *value;
-};
+} Argument;
 
-typedef void (*option_handler_t)(char *value);
+typedef int (*option_handler_t)(Tracee *tracee, char *value);
 
-struct option {
+typedef struct {
 	const char *class;
 	option_handler_t handler;
 	const char *description;
 	const char *detail;
-	struct argument arguments[5];
-};
+	Argument arguments[5];
+} Option;
 
 #ifndef VERSION
-#define VERSION "2.0.1"
+#define VERSION "2.2"
 #endif
 static const char *version = VERSION;
 static const char *subtitle = "chroot, mount --bind, and binfmt_misc without privilege/setup";
@@ -57,6 +58,7 @@ static char *recommended_bindings[] = {
 	"/etc/nsswitch.conf",
 	"/etc/resolv.conf",
 	"/etc/localtime",
+	"/run/",
 	"/dev/",
 	"/sys/",
 	"/proc/",
@@ -65,21 +67,19 @@ static char *recommended_bindings[] = {
 	NULL,
 };
 
-static void handle_option_r(char *value);
-static void handle_option_b(char *value);
-static void handle_option_q(char *value);
-static void handle_option_w(char *value);
-static void handle_option_u(char *value);
-static void handle_option_k(char *value);
-static void handle_option_0(char *value);
-static void handle_option_v(char *value);
-static void handle_option_V(char *value);
-static void handle_option_h(char *value);
-static void handle_option_B(char *value);
-static void handle_option_Q(char *value);
-static void handle_option_W(char *value);
+static int handle_option_r(Tracee *tracee, char *value);
+static int handle_option_b(Tracee *tracee, char *value);
+static int handle_option_q(Tracee *tracee, char *value);
+static int handle_option_w(Tracee *tracee, char *value);
+static int handle_option_v(Tracee *tracee, char *value);
+static int handle_option_V(Tracee *tracee, char *value);
+static int handle_option_h(Tracee *tracee, char *value);
+static int handle_option_k(Tracee *tracee, char *value);
+static int handle_option_0(Tracee *tracee, char *value);
+static int handle_option_B(Tracee *tracee, char *value);
+static int handle_option_Q(Tracee *tracee, char *value);
 
-static struct option options[] = {
+static Option options[] = {
 	{ .class = "Regular options",
 	  .arguments = {
 		{ .name = "-r", .separator = ' ', .value = "path" },
@@ -106,8 +106,7 @@ static struct option options[] = {
 \taccessible in the confined environment just as if it were part of\n\
 \tthe guest rootfs.  By default the host path is bound to the same\n\
 \tpath in the guest rootfs but users can specify any other location\n\
-\twith the syntax: -b *host_path*:*guest_location*. Such\n\
-\tbindings are said \"asymmetric\".",
+\twith the syntax: -b *host_path*:*guest_location*.",
 	},
 	{ .class = "Regular options",
 	  .arguments = {
@@ -132,57 +131,10 @@ static struct option options[] = {
 		{ .name = "--cwd", .separator = '=', .value = "path" },
 		{ .name = NULL, .separator = '\0', .value = NULL } },
 	  .handler = handle_option_w,
-	  .description = "Set the initial working directory to *path*, default is /.",
+	  .description = "Set the initial working directory to *path*.",
 	  .detail = "\tSome programs expect to be launched from a given directory but do\n\
-\tnot perform any chdir by themselves, the most common example\n\
-\tis ./configure scripts.  This option avoids the need for\n\
-\trunning a shell and then entering the directory manually.\n\
-\t\n\
-\tSee the -W option.",
-	},
-	{ .class = "Regular options",
-	  .arguments = {
-		{ .name = "-u", .separator = '\0', .value = NULL },
-		{ .name = "--allow-unknown-syscalls", .separator = '\0', .value = NULL },
-		{ .name = NULL, .separator = '\0', .value = NULL } },
-	  .handler = handle_option_u,
-	  .description = "Allow the execution of unknown syscalls.",
-	  .detail = "\tPRoot has to know the semantics of a syscall to translate its\n\
-\targuments. This is why any syscall that PRoot isn't aware of is\n\
-\tblocked.  This option disables this default behavior.",
-	},
-	{ .class = "Regular options",
-	  .arguments = {
-		{ .name = "-k", .separator = ' ', .value = "string" },
-		{ .name = "--kernel-release", .separator = '=', .value = "string" },
-		{ .name = NULL, .separator = '\0', .value = NULL } },
-	  .handler = handle_option_k,
-	  .description = "Force syscall uname to report *string* as kernel release.",
-	  .detail = "\tTechnically the GNU C library relies on syscalls provided by the\n\
-\tkernel that's why it performs a sanity check at each program\n\
-\tstart-up to verify whether the current kernel is known to be\n\
-\tcompatible.  If users are running a GNU C library that expects a\n\
-\tkernel more recent than the one used on their computers, they will\n\
-\tget the error \"FATAL: kernel too old\".  This option allows users\n\
-\tto cheat this sanity check by faking the release number of the\n\
-\tcurrent kernel.  This option should be used with care since it\n\
-\tdoes not improve the compatibility.",
-	},
-	{ .class = "Regular options",
-	  .arguments = {
-		{ .name = "-0", .separator = '\0', .value = NULL },
-		{ .name = "--root-id", .separator = '\0', .value = NULL },
-		{ .name = NULL, .separator = '\0', .value = NULL } },
-	  .handler = handle_option_0,
-	  .description = "Force some syscalls to behave as if executed by \"root\".",
-	  .detail = "\tSome programs will refuse to work if they are not run with \"root\"\n\
-\tprivileges, even if there is no technical reason for that.  This\n\
-\tis typically the case with package managers.  This option allows\n\
-\tusers to bypass this kind of limitation by faking the user/group\n\
-\tidentity, and by faking the success of some operations like\n\
-\tchanging the ownership of files, changing the root directory to\n\
-\t/, ...  Note that this option is quite limited compared to\n\
-\tfakeroot.",
+\tnot perform any chdir by themselves.  This option avoids the\n\
+\tneed for running a shell and then entering the directory manually.",
 	},
 	{ .class = "Regular options",
 	  .arguments = {
@@ -215,6 +167,35 @@ static struct option options[] = {
 	  .description = "Print the version and the command-line usage, then exit.",
 	  .detail = "",
 	},
+	{ .class = "Extension options",
+	  .arguments = {
+		{ .name = "-k", .separator = ' ', .value = "string" },
+		{ .name = "--kernel-release", .separator = '=', .value = "string" },
+		{ .name = NULL, .separator = '\0', .value = NULL } },
+	  .handler = handle_option_k,
+	  .description = "Set the kernel release and compatibility level to *string*.",
+	  .detail = "\tIf a program is run on a kernel older than the one expected by its\n\
+\tGNU C library, the following error is reported: \"FATAL: kernel too\n\
+\told\".  To be able to run such programs, PRoot can emulate some of\n\
+\tthe syscalls that are available in the kernel release specified by\n\
+\tstring but that are missing in the current kernel.",
+	},
+	{ .class = "Extension options",
+	  .arguments = {
+		{ .name = "-0", .separator = '\0', .value = NULL },
+		{ .name = "--root-id", .separator = '\0', .value = NULL },
+		{ .name = NULL, .separator = '\0', .value = NULL } },
+	  .handler = handle_option_0,
+	  .description = "Force some syscalls to behave as if executed by \"root\".",
+	  .detail = "\tSome programs will refuse to work if they are not run with \"root\"\n\
+\tprivileges, even if there is no technical reason for that.  This\n\
+\tis typically the case with package managers.  This option allows\n\
+\tusers to bypass this kind of limitation by faking the user/group\n\
+\tidentity, and by faking the success of some operations like\n\
+\tchanging the ownership of files, changing the root directory to\n\
+\t/, ...  Note that this option is quite limited compared to\n\
+\tfakeroot.",
+	},
 	{ .class = "Alias options",
 	  .arguments = {
 		{ .name = "-B", .separator = '\0', .value = NULL },
@@ -240,6 +221,7 @@ static struct option options[] = {
 \t    * /etc/nsswitch.conf\n\
 \t    * /etc/resolv.conf\n\
 \t    * /etc/localtime\n\
+\t    * /run/\n\
 \t    * /dev/\n\
 \t    * /sys/\n\
 \t    * /proc/\n\
@@ -254,17 +236,6 @@ static struct option options[] = {
 	  .description = "Alias: -q *command* -B",
 	  .detail = "\tThis option is highly recommended when using QEMU user-mode; it\n\
 \tenables all the recommended bindings.",
-	},
-	{ .class = "Alias options",
-	  .arguments = {
-		{ .name = "-W", .separator = '\0', .value = NULL },
-		{ .name = NULL, .separator = '\0', .value = NULL } },
-	  .handler = handle_option_W,
-	  .description = "Alias: -b . -w .",
-	  .detail = "\tMake the current working directory accessible in the guest rootfs\n\
-\tand then use it as the initial working directory.  This option is\n\
-\ttypically useful to launch ./configure scripts directly, for\n\
-\tinstance.",
 	},
 };
 

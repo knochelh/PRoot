@@ -10,9 +10,8 @@ INSTALL  = install
 CC       = gcc
 LD       = $(CC)
 CPPFLAGS = -I. -I$(VPATH)
-CFLAGS   = -Wall -O2
-LDFLAGS  = 
-LIBS     =
+CFLAGS   = -Wall -O2 $(shell pkg-config --cflags talloc)
+LDFLAGS  = $(shell pkg-config --libs talloc)
 
 ifdef LIMITED_USE
 # For limited use and MIT license
@@ -48,22 +47,25 @@ ENABLE_CEC_LIB=1
 endif
 
 OBJECTS = cli.o			\
-	config.o		\
 	notice.o		\
-	trace.o			\
-	execve/args.o		\
 	execve/execve.o		\
 	execve/interp.o		\
 	execve/elf.o		\
 	execve/ldso.o		\
 	path/binding.o		\
+	path/glue.o		\
 	path/canon.o		\
 	path/path.o		\
 	path/proc.o		\
 	syscall/syscall.o	\
-	tracee/info.o		\
+	tracee/tracee.o		\
+	tracee/array.o		\
 	tracee/mem.o		\
-	tracee/ureg.o
+	tracee/reg.o		\
+	tracee/event.o		\
+	extension/extension.o	\
+	extension/kompat/kompat.o \
+	extension/fake_id0/fake_id0.o
 
 
 ifdef ENABLE_CEC_LIB
@@ -114,7 +116,8 @@ CHECK_ADDONS = 	if [ ! -z "$(ENABLE_ADDONS)" ]; \
 		then /bin/echo -e "\#define ADDONS \"$(ENABLE_ADDONS)\""; \
 		fi;
 
-.SILENT .IGNORE .INTERMEDIATE: .check_readlinkat .check_readlinkat.o
+CHECK_OBJECTS = .check_readlinkat .check_readlinkat.o .check_process_vm .check_process_vm.o
+.SILENT .IGNORE .INTERMEDIATE: $(CHECK_OBJECTS)
 
 .check_readlinkat.o: .check_readlinkat.c
 	$(COMPILE:echo=false) $(silently) || true
@@ -124,7 +127,15 @@ CHECK_ADDONS = 	if [ ! -z "$(ENABLE_ADDONS)" ]; \
 
 CHECK_READLINKAT = if [ -e .check_readlinkat ]; then echo "\#define HAVE_READLINKAT"; fi
 
-build.h: .check_readlinkat
+.check_process_vm.o: .check_process_vm.c
+	$(COMPILE:echo=false) $(silently) || true
+
+.check_process_vm: .check_process_vm.o
+	$(LINK:echo=false) $(silently) || true
+
+CHECK_PROCESS_VM = if [ -e .check_process_vm ]; then echo "\#define HAVE_PROCESS_VM"; fi
+
+build.h: .check_readlinkat .check_process_vm
 	$($(quiet)GEN)
 	$(Q)echo "/* This file is auto-generated, edit at your own risk.  */" > $@
 	$(Q)echo "#ifndef BUILD_H"      >> $@
@@ -132,6 +143,7 @@ build.h: .check_readlinkat
 	$(Q)sh -c '$(CHECK_VERSION)'     >> $@
 	$(Q)sh -c '$(CHECK_READLINKAT)'  >> $@
 	$(Q)sh -c '$(CHECK_ADDONS)'  >> $@
+	$(Q)sh -c '$(CHECK_PROCESS_VM)'  >> $@
 	$(Q)echo "#endif /* BUILD_H */" >> $@
 
 ######################################################################
@@ -139,7 +151,7 @@ build.h: .check_readlinkat
 
 SRC     = $(dir $(firstword $(MAKEFILE_LIST)))
 COMPILE = $($(quiet)CC) $(CPPFLAGS) $(I_CPPFLAGS) $(CFLAGS) $(I_CFLAGS) -MD -c $(SRC)$*.c -o $@
-LINK    = $($(quiet)LD) $(LDFLAGS) $(I_LDFLAGS) -o $@ $^ $(LIBS)
+LINK    = $($(quiet)LD) -o $@ $^ $(LDFLAGS) $(I_LDFLAGS)
 
 proot: $(OBJECTS)
 	$(LINK)
@@ -159,7 +171,7 @@ $(USE_BUILD_H): build.h
 .DELETE_ON_ERROR:
 $(OBJECTS) build.h: $(firstword $(MAKEFILE_LIST))
 
-DEPS = $(OBJECTS:.o=.d) .check_readlinkat.d
+DEPS = $(OBJECTS:.o=.d) .check_readlinkat.d .check_process_vm.d
 -include $(DEPS)
 
 ######################################################################
@@ -170,7 +182,7 @@ DESTDIR = $(PREFIX)/bin
 
 .PHONY: clean distclean install uninstall
 clean distclean:
-	-$(RM) -f $(OBJECTS) proot $(DEPS) build.h
+	-$(RM) -f $(CHECK_OBJECTS) $(OBJECTS) proot $(DEPS) build.h
 
 install: proot
 	$($(quiet)INSTALL) -D $< $(DESTDIR)/$<

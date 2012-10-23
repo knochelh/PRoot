@@ -28,18 +28,14 @@
  * - goto end: "status < 0" means the tracee is dead, otherwise do
  *             nothing.
  */
-switch (tracee->sysnum) {
+switch (peek_reg(tracee, ORIGINAL, SYSARG_NUM)) {
 case PR_getcwd: {
-	char path[PATH_MAX];
 	size_t new_size;
 	size_t size;
 	word_t output;
+	word_t result;
 
-	result = peek_ureg(tracee, SYSARG_RESULT);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
+	result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 
 	/* Error reported by the kernel.  */
 	if ((int) result < 0) {
@@ -47,61 +43,36 @@ case PR_getcwd: {
 		goto end;
 	}
 
-	output = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
+	output = peek_reg(tracee, ORIGINAL, SYSARG_1);
 
-	size = (size_t) peek_ureg(tracee, SYSARG_2);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
-
-	if (size > PATH_MAX)
-		size = PATH_MAX;
-
+	size = (size_t) peek_reg(tracee, ORIGINAL, SYSARG_2);
 	if (size == 0) {
 		status = -EINVAL;
 		break;
 	}
 
-	/* The kernel does put the terminating NULL byte for
-	 * getcwd(2).  */
-	status = get_tracee_string(tracee, path, output, size);
-	if (status < 0)
-		goto end;
-
-	if (status >= size) {
-		status = (size == PATH_MAX ? -ENAMETOOLONG : -ERANGE);
-		break;
-	}
-
-	status = detranslate_path(tracee, path, NULL);
-	if (status < 0)
-		break;
-
-	/* The original path doesn't require any transformation, i.e
-	 * it is a symetric binding.  */
-	if (status == 0)
-		goto end;
-
-	new_size = status;
-	if (new_size > size) {
-		status = (size == PATH_MAX ? -ENAMETOOLONG : -ERANGE);
+	new_size = strlen(tracee->fs->cwd) + 1;
+	if (size < new_size) {
+		status = -ERANGE;
 		break;
 	}
 
 	/* Overwrite the path.  */
-	status = copy_to_tracee(tracee, output, path, new_size);
+	status = write_data(tracee, output, tracee->fs->cwd, new_size);
 	if (status < 0)
 		goto end;
 
 	/* The value of "status" is used to update the returned value
 	 * in translate_syscall_exit().  */
 	status = new_size;
+	break;
 }
+
+case PR_fchdir:
+case PR_chdir:
+	/* These syscalls are fully emulated, see enter.c for details
+	 * (like errors).  */
+	status = 0;
 	break;
 
 case PR_readlink:
@@ -113,12 +84,9 @@ case PR_readlinkat: {
 	size_t max_size;
 	word_t input;
 	word_t output;
+	word_t result;
 
-	result = peek_ureg(tracee, SYSARG_RESULT);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
+	result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 
 	/* Error reported by the kernel.  */
 	if ((int) result < 0) {
@@ -128,18 +96,15 @@ case PR_readlinkat: {
 
 	old_size = result;
 
-	output = peek_ureg(tracee, tracee->sysnum == PR_readlink
-				   ? SYSARG_2 : SYSARG_3);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
+	if (peek_reg(tracee, ORIGINAL, SYSARG_NUM) == PR_readlink) {
+		output   = peek_reg(tracee, ORIGINAL, SYSARG_2);
+		max_size = peek_reg(tracee, ORIGINAL, SYSARG_3);
+		input    = peek_reg(tracee, MODIFIED, SYSARG_1);
 	}
-
-	max_size = (size_t) peek_ureg(tracee, tracee->sysnum == PR_readlink
-					      ? SYSARG_3 : SYSARG_4);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
+	else {
+		output   = peek_reg(tracee, ORIGINAL,  SYSARG_3);
+		max_size = peek_reg(tracee, ORIGINAL, SYSARG_4);
+		input    = peek_reg(tracee, MODIFIED, SYSARG_2);
 	}
 
 	if (max_size > PATH_MAX)
@@ -152,20 +117,13 @@ case PR_readlinkat: {
 
 	/* The kernel does NOT put the terminating NULL byte for
 	 * getcwd(2).  */
-	status = copy_from_tracee(tracee, referee, output, old_size);
+	status = read_data(tracee, referee, output, old_size);
 	if (status < 0)
 		goto end;
 	referee[old_size] = '\0';
 
-	input = peek_ureg(tracee, tracee->sysnum == PR_readlink
-			        ? SYSARG_1 : SYSARG_2);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
-
 	/* Not optimal but safe (path is fully translated).  */
-	status = get_tracee_string(tracee, referer, input, PATH_MAX);
+	status = read_string(tracee, referer, input, PATH_MAX);
 	if (status < 0)
 		goto end;
 
@@ -186,40 +144,30 @@ case PR_readlinkat: {
 	new_size = (status - 1 < max_size ? status - 1 : max_size);
 
 	/* Overwrite the path.  */
-	status = copy_to_tracee(tracee, output, referee, new_size);
+	status = write_data(tracee, output, referee, new_size);
 	if (status < 0)
 		goto end;
 
 	/* The value of "status" is used to update the returned value
 	 * in translate_syscall_exit().  */
 	status = new_size;
-}
 	break;
+}
 
+#if defined(ARCH_X86_64)
 case PR_uname: {
 	struct utsname utsname;
 	word_t address;
+	word_t result;
 	size_t size;
 
-	bool change_uname;
-
-#if defined(ARCH_X86_64)
-	change_uname = config.kernel_release != NULL || tracee->uregs == uregs2;
-#else
-	change_uname = config.kernel_release != NULL;
-#endif
-
-	if (!change_uname) {
+	if (get_abi(tracee) != ABI_2) {
 		/* Nothing to do.  */
 		status = 0;
 		goto end;
 	}
 
-	result = peek_ureg(tracee, SYSARG_RESULT);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
+	result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 
 	/* Error reported by the kernel.  */
 	if ((int) result < 0) {
@@ -227,135 +175,74 @@ case PR_uname: {
 		goto end;
 	}
 
-	address = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
+	address = peek_reg(tracee, ORIGINAL, SYSARG_1);
 
-	status = copy_from_tracee(tracee, &utsname, address, sizeof(utsname));
+	status = read_data(tracee, &utsname, address, sizeof(utsname));
 	if (status < 0)
 		goto end;
 
-	/*
-	 * Note: on x86_64, we can handle the two modes (32/64) with
-	 * the same code since struct utsname as always the same
-	 * layout.
-	 */
+	/* Some 32-bit programs like package managers can be
+	 * confused when the kernel reports "x86_64".  */
+	size = sizeof(utsname.machine);
+	strncpy(utsname.machine, "i686", size);
+	utsname.machine[size - 1] = '\0';
 
-	if (config.kernel_release) {
-		size = sizeof(utsname.release);
+	status = write_data(tracee, address, &utsname, sizeof(utsname));
+	if (status < 0)
+		goto end;
 
-		strncpy(utsname.release, config.kernel_release, size);
-		utsname.release[size - 1] = '\0';
-	}
-
-#if defined(ARCH_X86_64)
-	if (tracee->uregs == uregs2) {
-		size = sizeof(utsname.machine);
-
-		/* Some 32-bit programs like package managers can be
-		 * confused when the kernel reports "x86_64".  */
-		strncpy(utsname.machine, "i686", size);
-		utsname.machine[size - 1] = '\0';
-	}
+	status = 0;
+	break;
+}
 #endif
 
-	status = copy_to_tracee(tracee, address, &utsname, sizeof(utsname));
-	if (status < 0)
-		goto end;
-
+case PR_execve:
+	if ((int) peek_reg(tracee, CURRENT, SYSARG_RESULT) >= 0) {
+case PR_rt_sigreturn:
+case PR_sigreturn:
+		restore_original_sp = false;
+	}
 	status = 0;
-}
-	break;
-
-case PR_chroot: {
-	char path[PATH_MAX];
-	word_t input;
-
-	if (!config.fake_id0) {
-		status = 0;
-		goto end;
-	}
-
-	result = peek_ureg(tracee, SYSARG_RESULT);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
-
-	/* Override only permission errors.  */
-	if ((int) result != -EPERM) {
-		status = 0;
-		goto end;
-	}
-
-	input = peek_ureg(tracee, SYSARG_1);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
-
-	status = get_tracee_string(tracee, path, input, PATH_MAX);
-	if (status < 0)
-		goto end;
-
-	/* Succeed only if the new rootfs == current rootfs.  */
-	status = compare_paths2(root, root_length, path, strlen(path));
-	if (status != PATHS_ARE_EQUAL) {
-		status = 0;
-		goto end;
-	}
-
-	status = 0;
-}
-	break;
-
-case PR_chown:
-case PR_fchown:
-case PR_lchown:
-case PR_chown32:
-case PR_fchown32:
-case PR_lchown32:
-case PR_fchownat:
-	if (!config.fake_id0) {
-		status = 0;
-		goto end;
-	}
-
-	result = peek_ureg(tracee, SYSARG_RESULT);
-	if (errno != 0) {
-		status = -errno;
-		goto end;
-	}
-
-	/* Override only permission errors.  */
-	if ((int) result != -EPERM) {
-		status = 0;
-		goto end;
-	}
-
-	status = 0;
-	break;
-
-case PR_getuid:
-case PR_getgid:
-case PR_getegid:
-case PR_geteuid:
-case PR_getuid32:
-case PR_getgid32:
-case PR_geteuid32:
-case PR_getegid32:
-	status = 0;
-	if (config.fake_id0)
-		break;
 	goto end;
 
-case PR_getresuid:
-case PR_getresuid32:
-case PR_getresgid:
-case PR_getresgid32:
-	/* TODO.  */
+case PR_fork:
+case PR_clone: {
+	/* Note: vfork can't be handled here since the parent don't
+	 * return until the child does a call to execve(2) and the
+	 * child would be stopped by PRoot until the parent returns
+	 * (deak-lock).  Instead it is handled asynchronously in
+	 * event.c.  */
+
+	Tracee *child;
+	word_t result;
+	word_t flags;
+
+	result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+
+	/* Error reported by the kernel.  */
+	if ((int) result < 0) {
+		status = 0;
+		goto end;
+	}
+
+	child = get_tracee(result, true);
+	if (child == NULL) {
+		status = -ENOMEM;
+		break;
+	}
+
+	if (peek_reg(tracee, ORIGINAL, SYSARG_NUM) == PR_clone)
+		flags = peek_reg(tracee, ORIGINAL, SYSARG_2);
+	else
+		flags = 0;
+
+	status = inherit_config(child, tracee, (flags & CLONE_FS) != 0);
+	if (status < 0)
+		break;
+
+	status = 0;
+	goto end;
+}
 
 default:
 	status = 0;

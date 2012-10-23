@@ -20,15 +20,15 @@
  * 02110-1301 USA.
  */
 
+#define _XOPEN_SOURCE 500 /* pread(2), */
 #include <fcntl.h>  /* open(2), */
 #include <unistd.h> /* read(2), close(2), */
-#include <limits.h> /* PATH_MAX, ARG_MAX, */
+#include <linux/limits.h> /* PATH_MAX, ARG_MAX, */
 #include <errno.h>  /* ENAMETOOLONG, */
 #include <string.h> /* strcpy(3), */
 
 #include "execve/interp.h"
 #include "execve/elf.h"
-#include "config.h"
 
 #include "compat.h"
 
@@ -43,10 +43,8 @@
  *     passed as a *single* argument to the interpreter, and this
  *     string can include white space.
  */
-int extract_script_interp(struct tracee_info *tracee,
-			  const char *t_path,
-			  char u_interp[PATH_MAX],
-			  char argument[ARG_MAX])
+int extract_script_interp(const Tracee *tracee, const char *t_path,
+			char u_interp[PATH_MAX], char argument[ARG_MAX])
 {
 	char tmp;
 
@@ -184,13 +182,11 @@ end:
  * returns -errno if an error occured, 1 if a ELF interpreter was
  * found and extracted, otherwise 0.
  */
-int extract_elf_interp(struct tracee_info *tracee,
-		       const char *t_path,
-		       char u_interp[PATH_MAX],
-		       char argument[ARG_MAX])
+int extract_elf_interp(const Tracee *tracee, const char *t_path,
+		       char u_interp[PATH_MAX], char argument[ARG_MAX])
 {
-	union elf_header elf_header;
-	union program_header program_header;
+	ElfHeader elf_header;
+	ProgramHeader program_header;
 
 	size_t extra_size;
 	int status;
@@ -206,7 +202,7 @@ int extract_elf_interp(struct tracee_info *tracee,
 	if (fd < 0)
 		return fd;
 
-	status = find_program_header(fd, &elf_header, &program_header,
+	status = find_program_header(tracee, fd, &elf_header, &program_header,
 				PT_INTERP, (uint64_t) -1);
 	if (status < 0) {
 		status = -EACCES;
@@ -218,21 +214,15 @@ int extract_elf_interp(struct tracee_info *tracee,
 	segment_offset = PROGRAM_FIELD(elf_header, program_header, offset);
 	segment_size   = PROGRAM_FIELD(elf_header, program_header, filesz);
 
-	status = (int) lseek(fd, segment_offset, SEEK_SET);
-	if (status < 0) {
-		status = -EACCES;
-		goto end;
-	}
-
 	/* If we are executing a host binary under a QEMUlated
 	 * environment, we have to access its ELF interpreter through
 	 * the "host-rootfs" binding.  Technically it means the host
 	 * ELF interpreter "/lib/ld-linux.so.2" is accessed as
-	 * "${host_rootfs}/lib/ld-linux.so.2" to avoid conflict with
+	 * "${HOST_ROOTFS}/lib/ld-linux.so.2" to avoid conflict with
 	 * the guest "/lib/ld-linux.so.2".  */
-	if (config.qemu) {
-		strcpy(u_interp, config.host_rootfs);
-		extra_size = strlen(config.host_rootfs);
+	if (tracee->qemu != NULL) {
+		strcpy(u_interp, HOST_ROOTFS);
+		extra_size = strlen(HOST_ROOTFS);
 	}
 	else
 		extra_size = 0;
@@ -242,8 +232,8 @@ int extract_elf_interp(struct tracee_info *tracee,
 		goto end;
 	}
 
-	status = read(fd, u_interp + extra_size, segment_size);
-	if (status < 0) {
+	status = pread(fd, u_interp + extra_size, segment_size, segment_offset);
+	if (status != segment_size) {
 		status = -EACCES;
 		goto end;
 	}

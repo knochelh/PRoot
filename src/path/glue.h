@@ -20,21 +20,14 @@
  * 02110-1301 USA.
  */
 
-#ifndef UREG_H
-#define UREG_H
+#ifndef GLUE_H
+#define GLUE_H
 
-#include <sys/types.h> /* off_t */
+#include <limits.h> /* PATH_MAX, */
 
-#include "tracee/info.h"
+#include "tracee/tracee.h"
+#include "path.h"
 
-#define UREGS_LENGTH 9
-extern off_t uregs[UREGS_LENGTH];
+extern mode_t build_glue(Tracee *tracee, const char *guest_path, char host_path[PATH_MAX], Finality is_final);
 
-#if defined(ARCH_X86_64)
-extern off_t uregs2[UREGS_LENGTH];
-#endif
-
-extern word_t peek_ureg(struct tracee_info *tracee, int index);
-extern int poke_ureg(struct tracee_info *tracee, int index, word_t value);
-
-#endif /* UREG_H */
+#endif /* GLUE_H */

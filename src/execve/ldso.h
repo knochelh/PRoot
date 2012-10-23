@@ -23,10 +23,12 @@
 #ifndef LDSO_H
 #define LDSO_H
 
-#include <stdbool.h>
+#include <linux/limits.h>
 
-extern void init_module_ldso(void);
-extern bool ldso_env_passthru(char **envp[], char **argv[], const char *define, const char *undefine);
-extern int rebuild_host_ldso_paths(const char t_program[PATH_MAX], char **envp[]);
+#include "tracee/array.h"
+
+extern int ldso_env_passthru(Array *envp, Array *argv, const char *define, const char *undefine);
+extern int rebuild_host_ldso_paths(const Tracee *tracee, const char t_program[PATH_MAX], Array *envp);
+extern int compare_item_env(Array *array, size_t index, const char *name);
 
 #endif /* LDSO_H */

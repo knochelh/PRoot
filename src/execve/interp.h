@@ -23,22 +23,17 @@
 #ifndef INTERP_H
 #define INTERP_H
 
-#include "tracee/info.h"
-#include "execve/args.h" /* ARG_MAX, */
+#include <linux/limits.h> /* PATH_MAX, ARG_MAX, */
 
-typedef int (* extract_interp_t)(struct tracee_info *tracee,
-				 const char *t_path,
-				 char u_interp[PATH_MAX],
-				 char argument[ARG_MAX]);
+#include "tracee/tracee.h"
 
-extern int extract_script_interp(struct tracee_info *tracee,
-				 const char *t_path,
-				 char u_interp[PATH_MAX],
-				 char argument[ARG_MAX]);
+typedef int (* extract_interp_t)(const Tracee *tracee, const char *t_path,
+				 char u_interp[PATH_MAX], char argument[ARG_MAX]);
 
-extern int extract_elf_interp(struct tracee_info *tracee,
-				 const char *t_path,
-				 char u_interp[PATH_MAX],
-				 char argument[ARG_MAX]);
+extern int extract_script_interp(const Tracee *tracee, const char *t_path,
+				 char u_interp[PATH_MAX], char argument[ARG_MAX]);
+
+extern int extract_elf_interp(const Tracee *tracee, const char *t_path,
+				 char u_interp[PATH_MAX], char argument[ARG_MAX]);
 
 #endif /* INTERP_H */

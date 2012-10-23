@@ -26,17 +26,30 @@
 #include <limits.h> /* PATH_MAX, */
 #include <stdbool.h>
 
-extern void bind_path(const char *path, const char *location, bool must_exist);
-extern void print_bindings(void);
+#include "tracee/tracee.h"
+#include "path.h"
 
-enum binding_side {
-	GUEST_SIDE = 1,
-	HOST_SIDE = 2,
-};
+typedef struct binding {
+	Path host;
+	Path guest;
 
-extern const char *get_path_binding(enum binding_side side, const char path[PATH_MAX]);
-extern int substitute_binding(enum binding_side side, char path[PATH_MAX]);
+	bool need_substitution;
+	bool must_exist;
 
-extern void init_bindings(void);
+	struct {
+		CIRCLEQ_ENTRY(binding) pending;
+		CIRCLEQ_ENTRY(binding) guest;
+		CIRCLEQ_ENTRY(binding) host;
+	} link;
+} Binding;
+
+typedef CIRCLEQ_HEAD(bindings, binding) Bindings;
+
+extern void insort_binding2(Tracee *tracee, Binding *binding);
+extern Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist);
+extern int initialize_bindings(Tracee *tracee);
+extern const char *get_path_binding(Tracee* tracee, Side side, const char path[PATH_MAX]);
+extern const char *get_root(const Tracee* tracee);
+extern int substitute_binding(Tracee* tracee, Side side, char path[PATH_MAX]);
 
 #endif /* BINDING_H */

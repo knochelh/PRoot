@@ -25,16 +25,26 @@
 #include <sys/ptrace.h> /* ptrace(2), PTRACE*, */
 #include <assert.h>     /* assert(3), */
 #include <errno.h>      /* errno(3), */
+#include <stddef.h>     /* offsetof(), */
+#include <stdint.h>     /* *int*_t(), */
+#include <limits.h>     /* ULONG_MAX, */
+#include <string.h>     /* memcpy(3), */
 
-#include "tracee/ureg.h"
-#include "notice.h"  /* notice(), */
-#include "syscall/syscall.h" /* enum sysarg, STACK_POINTER, */
+#include "tracee/reg.h"
+#include "tracee/abi.h"
+
+/**
+ * Compute the offset of the register @reg_name in the USER area.
+ */
+#define USER_REGS_OFFSET(reg_name)			\
+	(offsetof(struct user, regs)			\
+	 + offsetof(struct user_regs_struct, reg_name))
 
 /* Specify the ABI registers (syscall argument passing, stack pointer).
  * See sysdeps/unix/sysv/linux/${ARCH}/syscall.S from the GNU C Library. */
 #if defined(ARCH_X86_64)
 
-    off_t uregs[UREGS_LENGTH] = {
+    static off_t reg_offset[] = {
 	[SYSARG_NUM]    = USER_REGS_OFFSET(orig_rax),
 	[SYSARG_1]      = USER_REGS_OFFSET(rdi),
 	[SYSARG_2]      = USER_REGS_OFFSET(rsi),
@@ -46,7 +56,7 @@
 	[STACK_POINTER] = USER_REGS_OFFSET(rsp),
     };
 
-    off_t uregs2[UREGS_LENGTH] = {
+    static off_t reg_offset_x86[] = {
 	[SYSARG_NUM]    = USER_REGS_OFFSET(orig_rax),
 	[SYSARG_1]      = USER_REGS_OFFSET(rbx),
 	[SYSARG_2]      = USER_REGS_OFFSET(rcx),
@@ -55,12 +65,17 @@
 	[SYSARG_5]      = USER_REGS_OFFSET(rdi),
 	[SYSARG_6]      = USER_REGS_OFFSET(rbp),
 	[SYSARG_RESULT] = USER_REGS_OFFSET(rax),
-	[STACK_POINTER] = USER_REGS_OFFSET(rsp)
+	[STACK_POINTER] = USER_REGS_OFFSET(rsp),
     };
+
+    #define REG(tracee, version, index)					\
+	(*(word_t*) (tracee->_regs[ORIGINAL].cs == 0x23			\
+		? (((uint8_t *) &tracee->_regs[version]) + reg_offset_x86[index]) \
+		: (((uint8_t *) &tracee->_regs[version]) + reg_offset[index])))
 
 #elif defined(ARCH_ARM_EABI)
 
-    off_t uregs[UREGS_LENGTH] = {
+    static off_t reg_offset[] = {
 	[SYSARG_NUM]    = USER_REGS_OFFSET(uregs[7]),
 	[SYSARG_1]      = USER_REGS_OFFSET(uregs[0]),
 	[SYSARG_2]      = USER_REGS_OFFSET(uregs[1]),
@@ -74,7 +89,7 @@
 
 #elif defined(ARCH_X86)
 
-    off_t uregs[UREGS_LENGTH] = {
+    static off_t reg_offset[] = {
 	[SYSARG_NUM]    = USER_REGS_OFFSET(orig_eax),
 	[SYSARG_1]      = USER_REGS_OFFSET(ebx),
 	[SYSARG_2]      = USER_REGS_OFFSET(ecx),
@@ -88,7 +103,7 @@
 
 #elif defined(ARCH_SH4)
 
-    off_t uregs[UREGS_LENGTH] = {
+    static off_t reg_offset[] = {
 	[SYSARG_NUM]    = USER_REGS_OFFSET(regs[3]),
 	[SYSARG_1]      = USER_REGS_OFFSET(regs[4]),
 	[SYSARG_2]      = USER_REGS_OFFSET(regs[5]),
@@ -106,57 +121,79 @@
 
 #endif
 
+#if !defined(REG)
+    #define REG(tracee, version, index)					\
+	(*(word_t*) (((uint8_t *) &tracee->_regs[version]) + reg_offset[index]))
+#endif
+
 /**
- * Return the value of the @tracee's register @index (regarding
- * uregs[]). This function sets the special global variable errno if
- * an error occured.
+ * Return the *cached* value of the given @tracees' @reg.
  */
-word_t peek_ureg(struct tracee_info *tracee, int index)
+word_t peek_reg(const Tracee *tracee, RegVersion version, Reg reg)
 {
 	word_t result;
 
-	/* Sanity checks. */
-	assert(index >= SYSARG_NUM);
-	assert(index <= STACK_POINTER);
+	assert(version < NB_REG_VERSION);
 
-	/* Get the argument register from the tracee's USER area. */
-	result = ptrace(PTRACE_PEEKUSER, tracee->pid, tracee->uregs[index], NULL);
+	result = REG(tracee, version, reg);
 
-#ifdef ARCH_X86_64
 	/* Use only the 32 least significant bits (LSB) when running
-	 * 32-bit processes on x86_64. */
-	if (tracee->uregs == uregs2)
+	 * 32-bit processes on a 64-bit kernel.  */
+	if (is_32on64_mode(tracee))
 		result &= 0xFFFFFFFF;
-#endif
 
 	return result;
 }
 
 /**
- * Set the @tracee's register @index (regarding uregs[]) to @value.
- * This function returns -errno if an error occured.
+ * Set the *cached* value of the given @tracees' @reg.
  */
-int poke_ureg(struct tracee_info *tracee, int index, word_t value)
+void poke_reg(Tracee *tracee, Reg reg, word_t value)
 {
-	  long status;
+	if (peek_reg(tracee, CURRENT, reg) == value)
+		return;
 
-	  /* Sanity checks. */
-	  assert(index >= SYSARG_NUM);
-	  assert(index <= STACK_POINTER);
+	REG(tracee, CURRENT, reg) = value;
+	tracee->_regs_have_changed = true;
+}
 
-#ifdef ARCH_X86_64
-	/* Check we are using only the 32 LSB when running 32-bit
-	 * processes on x86_64. */
-	if (tracee->uregs == uregs2
-	    && (value >> 32) != 0
-	    && (value >> 32) != 0xFFFFFFFF)
-		notice(WARNING, INTERNAL, "value too large for a 32-bit register");
-#endif
+/**
+ * Copy all @tracee's general purpose registers into a dedicated
+ * cache.  This function returns -errno if an error occured, 0
+ * otherwise.
+ */
+int fetch_regs(Tracee *tracee)
+{
+	int status;
 
-	  /* Set the argument register in the tracee's USER area. */
-	  status = ptrace(PTRACE_POKEUSER, tracee->pid, tracee->uregs[index], value);
-	  if (status < 0)
-		  return -errno;
+	status = ptrace(PTRACE_GETREGS, tracee->pid, NULL, &tracee->_regs[CURRENT]);
+	if (status < 0)
+		return status;
+	tracee->_regs_have_changed = false;
 
-	  return 0;
+	if (tracee->status == 0)
+		memcpy(&tracee->_regs[ORIGINAL], &tracee->_regs[CURRENT], sizeof(struct user_regs_struct));
+
+	return 0;
+}
+
+/**
+ * Copy the cached values of all @tracee's general purpose registers
+ * back to the process, if necessary.  This function returns -errno if
+ * an error occured, 0 otherwise.
+ */
+int push_regs(Tracee *tracee)
+{
+	int status;
+
+	if (tracee->_regs_have_changed) {
+		status = ptrace(PTRACE_SETREGS, tracee->pid, NULL, &tracee->_regs[CURRENT]);
+		if (status < 0)
+			return status;
+	}
+
+	if (tracee->status != 0)
+		memcpy(&tracee->_regs[MODIFIED], &tracee->_regs[CURRENT], sizeof(struct user_regs_struct));
+
+	return 0;
 }

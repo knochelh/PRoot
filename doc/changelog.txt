@@ -1,3 +1,81 @@
+Release v2.2
+============
+
+* This release brings some critical fixes so an upgrade is highly
+  recommended, especially on x86_64 and Ubuntu.
+
+* PRoot is now a lot faster: the speed-up can be up to 50% depending
+  on the kind of application.
+
+* PRoot can now mount/bind files anywhere in the guest rootfs, even if
+  the mount point has no parent directory (and/or can't be created).
+  With previous versions of PRoot, that would created kinda black hole
+  in the filesystem hierarchy that might bug some programs like "cpio"
+  or "rpm".
+
+  For example, with the previous version of PRoot::
+
+       $ proot -b /etc/motd:/black/holes/and/revelations
+       proot warning: can't create the guest path (binding) ...
+       proot info: started
+
+       $ find /black
+       find: `/black: No such file or directory
+
+       $ cat /black/holes/and/revelations
+       Time has come to make things right -- Matthew Bellamy
+
+  And now::
+
+       $ proot -b /etc/motd:/black/holes/and/revelations
+       proot info: started
+
+       $ find /black
+       /black
+       /black/holes
+       /black/holes/and
+       /black/holes/and/revelations
+
+       $ cat /black/holes/and/revelations
+       Time has come to make things right -- Matthew Bellamy
+
+* "/run" was added to the list of recommended bindings (-B/-Q).
+
+* SH4 and ARM architectures are now officially supported.
+
+Thanks
+------
+
+Huge thanks to Rémi DURAFFORT for all the tests, bug reports, fixes,
+and for hosting http://proot.me.
+
+Thanks to Thomas P. HIGDON for the advanced investigation on a really
+tricky bug (red zone corruption).
+
+
+Release v2.1
+============
+
+New features
+------------
+
+* PRoot can now emulate some of the syscalls that are available in the
+  kernel release specified by -k but that are missing in the host
+  kernel.  This allows the execution of guest programs expecting a
+  kernel newer than the actual one, if you encountered the famous
+  "FATAL: kernel too old" or "qemu: Unsupported syscall" messages.
+
+* The current working directory isn't changed anymore if it is still
+  accessible in the guest environment (binding).
+
+Fixes
+-----
+
+* Added support for architectures with no misalignment support (SH4).
+
+* Fix support for: link(2), linkat(2), symlink(2), and symlinkat(2).
+
+
 Release v2.0.1
 ==============
 

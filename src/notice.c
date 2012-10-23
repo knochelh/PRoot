@@ -22,23 +22,25 @@
 
 #include <errno.h>  /* errno, */
 #include <string.h> /* strerror(3), */
-#include <stdlib.h> /* exit(3), EXIT_*, */
 #include <stdarg.h> /* va_*, */
 #include <stdio.h>  /* vfprintf(3), */
+#include <limits.h> /* INT_MAX, */
 
-#include "config.h"
 #include "notice.h"
+#include "tracee/tracee.h"
 
 /**
  * Print @message to the standard error stream according to its
- * @severity and @origin.  This function exits if the @severity is
- * ERROR.
+ * @severity and @origin.
  */
-void notice(enum notice_severity severity, enum notice_origin origin, const char *message, ...)
+void notice(const Tracee *tracee, Severity severity, Origin origin, const char *message, ...)
 {
 	va_list extra_params;
+	int verbose_level;
 
-	if (config.verbose_level < 0 && severity != ERROR)
+	verbose_level = (tracee != NULL ? tracee->verbose : 0);
+
+	if (verbose_level < 0 && severity != ERROR)
 		return;
 
 	switch (severity) {
@@ -56,6 +58,9 @@ void notice(enum notice_severity severity, enum notice_origin origin, const char
 		break;
 	}
 
+	if (origin == TALLOC)
+		fprintf(stderr, "talloc: ");
+
 	va_start(extra_params, message);
 	vfprintf(stderr, message, extra_params);
 	va_end(extra_params);
@@ -66,16 +71,14 @@ void notice(enum notice_severity severity, enum notice_origin origin, const char
 		perror(NULL);
 		break;
 
+	case TALLOC:
+		break;
+
 	case INTERNAL:
 	case USER:
 	default:
 		fprintf(stderr, "\n");
 		break;
-	}
-
-	if (severity == ERROR) {
-		fprintf(stderr, "proot error: see `proot --help` or `man proot`.\n");
-		exit(EXIT_FAILURE);
 	}
 
 	return;

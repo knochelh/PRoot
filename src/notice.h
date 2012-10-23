@@ -23,24 +23,28 @@
 #ifndef NOTICE_H
 #define NOTICE_H
 
+#include "tracee/tracee.h"
+
 /* Specify where a notice is coming from. */
-enum notice_origin
-{
+typedef enum {
 	SYSTEM,
 	INTERNAL,
 	USER,
-};
+	TALLOC,
+} Origin;
 
 /* Specify the severity of a notice. */
-enum notice_severity
-{
+typedef enum {
 	ERROR,
 	WARNING,
 	INFO,
-};
+} Severity;
 
-#define VERBOSE(level, message, args...) do { if (config.verbose_level >= (level)) notice(INFO, INTERNAL, (message), ## args); } while (0)
+#define VERBOSE(tracee, level, message, args...) do {			\
+		if (tracee == NULL || tracee->verbose >= (level))	\
+			notice(tracee, INFO, INTERNAL, (message), ## args); \
+	} while (0)
 
-extern void notice(enum notice_severity severity, enum notice_origin origin, const char *message, ...);
+extern void notice(const Tracee *tracee, Severity severity, Origin origin, const char *message, ...);
 
 #endif /* NOTICE_H */

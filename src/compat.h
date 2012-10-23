@@ -30,6 +30,9 @@
 #    ifndef AT_SYMLINK_FOLLOW
 #        define AT_SYMLINK_FOLLOW	0x400
 #    endif
+#    ifndef AT_REMOVEDIR
+#        define AT_REMOVEDIR		0x200
+#    endif
 #    ifndef AT_SYMLINK_NOFOLLOW
 #        define AT_SYMLINK_NOFOLLOW	0x100
 #    endif
@@ -57,6 +60,9 @@
 #    ifndef PTRACE_O_TRACEEXEC
 #        define PTRACE_O_TRACEEXEC	0x00000010
 #    endif
+#    ifndef PTRACE_O_TRACEEXIT
+#        define PTRACE_O_TRACEEXIT	0x00000040
+#    endif
 #    ifndef PTRACE_EVENT_FORK
 #        define PTRACE_EVENT_FORK	1
 #    endif
@@ -68,6 +74,9 @@
 #    endif
 #    ifndef PTRACE_EVENT_EXEC
 #        define PTRACE_EVENT_EXEC	4
+#    endif
+#    ifndef PTRACE_EVENT_EXIT
+#        define PTRACE_EVENT_EXIT	6
 #    endif
 #    ifndef ADDR_NO_RANDOMIZE
 #        define ADDR_NO_RANDOMIZE	0x0040000

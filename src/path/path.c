@@ -20,10 +20,11 @@
  * 02110-1301 USA.
  */
 
+#define _ATFILE_SOURCE /* readlinkat(2), */
 #include <string.h>    /* string(3), */
 #include <stdarg.h>    /* va_*(3), */
 #include <assert.h>    /* assert(3), */
-#include <stdlib.h>    /* realpath(3), free(3), */
+#include <fcntl.h>     /* AT_*,  */
 #include <unistd.h>    /* readlink*(2), *stat(2), getpid(2), */
 #include <sys/types.h> /* pid_t, */
 #include <sys/stat.h>  /* S_ISDIR, */
@@ -36,15 +37,11 @@
 #include "path/binding.h"
 #include "path/canon.h"
 #include "path/proc.h"
+#include "extension/extension.h"
 #include "notice.h"
-#include "config.h"
 #include "build.h"
 
 #include "compat.h"
-
-static bool initialized = false;
-char root[PATH_MAX];
-size_t root_length;
 
 /**
  * Copy in @component the first path component pointed to by @cursor,
@@ -53,18 +50,18 @@ size_t root_length;
  *
  *     - -errno if an error occured.
  *
- *     - FINAL_FORCE_DIR if it the last component of the path but we
+ *     - FINAL_SLASH if it the last component of the path but we
  *       really expect a directory.
  *
  *     - FINAL_NORMAL if it the last component of the path.
  *
  *     - 0 otherwise.
  */
-int next_component(char component[NAME_MAX], const char **cursor)
+Finality next_component(char component[NAME_MAX], const char **cursor)
 {
 	const char *start;
 	ptrdiff_t length;
-	int want_dir;
+	bool want_dir;
 
 	/* Sanity checks. */
 	assert(component != NULL);
@@ -96,10 +93,10 @@ int next_component(char component[NAME_MAX], const char **cursor)
 
 	if (**cursor == '\0')
 		return (want_dir
-			? FINAL_FORCE_DIR
+			? FINAL_SLASH
 			: FINAL_NORMAL);
 
-	return 0;
+	return NOT_FINAL;
 }
 
 /**
@@ -189,107 +186,210 @@ int join_paths(int number_paths, char result[PATH_MAX], ...)
 }
 
 /**
- * Initialize internal data of the path translator.
+ * Put in @host_path the full path to the given shell @command.  The
+ * @command is searched in @paths if not null, otherwise in $PATH
+ * (relatively to the @tracee's file-system name-space).  This
+ * function always returns -1 on error, otherwise 0.
  */
-void init_module_path()
+int which(Tracee *tracee, const char *paths, char host_path[PATH_MAX], char *const command)
 {
-	assert(strlen(config.guest_rootfs) < PATH_MAX);
-	strcpy(root, config.guest_rootfs);
+	char path[PATH_MAX];
+	const char *cursor;
+	struct stat statr;
+	int status;
 
-	root_length = strlen(root);
-	initialized = true;
+	assert(command != NULL);
 
-	init_bindings();
+	/* Is the command available without any $PATH look-up?  */
+	status = realpath2(tracee, host_path, command, false);
+	if (status == 0
+	    && stat(host_path, &statr) == 0
+	    && S_ISREG(statr.st_mode)
+	    && (statr.st_mode & S_IXUSR) != 0)
+		return 0;
+
+	paths = paths ?: getenv("PATH");
+	if (paths == NULL)
+		return -1;
+
+	cursor = paths;
+	do {
+		size_t length;
+
+		length = strcspn(cursor, ":");
+		cursor += length + 1;
+
+		if (length >= PATH_MAX)
+			continue;
+		else if (length == 0)
+			strcpy(path, ".");
+		else {
+			strncpy(path, cursor - length - 1, length);
+			path[length] = '\0';
+		}
+
+		/* Avoid buffer-overflow.  */
+		if (length + strlen(command) + 2 >= PATH_MAX)
+			continue;
+
+		strcat(path, "/");
+		strcat(path, command);
+
+		status = realpath2(tracee, host_path, path, false);
+		if (status == 0
+		    && stat(host_path, &statr) == 0
+		    && S_ISREG(statr.st_mode)
+		    && (statr.st_mode & S_IXUSR) != 0)
+				return 0;
+	} while (*(cursor - 1) != '\0');
+
+	notice(tracee, WARNING, USER, "no %s in %s (root = %s)", command, paths, get_root(tracee));
+	return -1;
 }
 
 /**
- * Copy in @result the equivalent of @root + canonicalize(@dir_fd +
- * @fake_path).  If @fake_path is not absolute then it is relative to
- * the directory referred by the descriptor @dir_fd (AT_FDCWD is for
- * the current working directory).  See the documentation of
- * canonicalize() for the meaning of @deref_final.
+ * Put in @host_path the canonicalized form of @path.  In the nominal
+ * case (@tracee == NULL), this function is barely equivalent to
+ * realpath(), but when doing sub-reconfiguration, the path is
+ * canonicalized relatively to the current @tracee's file-system
+ * name-space.  This function returns -errno on error, otherwise 0.
  */
-int translate_path(struct tracee_info *tracee, char result[PATH_MAX], int dir_fd, const char *fake_path, int deref_final)
+int realpath2(Tracee *tracee, char host_path[PATH_MAX], const char *path, bool deref_final)
 {
-	char link[32]; /* 32 > sizeof("/proc//cwd") + sizeof(#ULONG_MAX) */
-	char tmp[PATH_MAX];
 	int status;
-	pid_t pid;
 
-	assert(initialized);
+	if (tracee == NULL)
+		status = (realpath(path, host_path) == NULL ? -errno : 0);
+	else
+		status = translate_path(tracee, host_path, AT_FDCWD, path, deref_final);
+	return status;
+}
 
-	pid = (tracee != NULL ? tracee->pid : getpid());
+/**
+ * Put in @guest_path the canonicalized current working directory.  In
+ * the nominal case (@tracee == NULL), this function is barely
+ * equivalent to realpath(), but when doing sub-reconfiguration, the
+ * path is canonicalized relatively to the current @tracee's
+ * file-system name-space.  This function returns -errno on error,
+ * otherwise 0.
+ */
+int getcwd2(Tracee *tracee, char guest_path[PATH_MAX])
+{
+	if (tracee == NULL) {
+		if (getcwd(guest_path, PATH_MAX) == NULL)
+			return -errno;
+	}
+	else {
+		if (strlen(tracee->fs->cwd) >= PATH_MAX)
+			return -ENAMETOOLONG;
 
-	/* Use "/" as the base if it is an absolute [fake] path. */
-	if (fake_path[0] == '/') {
-		strcpy(result, "/");
+		strcpy(guest_path, tracee->fs->cwd);
+	}
+
+	return 0;
+}
+
+/**
+ * Remove the trailing "/" or "/.".
+ */
+void chop_finality(char *path)
+{
+	size_t length = strlen(path);
+
+	if (path[length - 1] == '.') {
+		assert(length >= 2);
+		/* Special case for "/." */
+		if (length == 2)
+			path[length - 1] = '\0';
+		else
+			path[length - 2] = '\0';
+	}
+	else if (path[length - 1] == '/') {
+		/* Special case for "/" */
+		if (length > 1)
+			path[length - 1] = '\0';
+	}
+}
+
+/**
+ * Copy in @host_path the equivalent of "@tracee->root +
+ * canonicalize(@dir_fd + @guest_path)".  If @guest_path is not
+ * absolute then it is relative to the directory referred by the
+ * descriptor @dir_fd (AT_FDCWD is for the current working directory).
+ * See the documentation of canonicalize() for the meaning of
+ * @deref_final.  This function returns -errno if an error occured,
+ * otherwise 0.
+ */
+int translate_path(Tracee *tracee, char host_path[PATH_MAX],
+		   int dir_fd, const char *guest_path, bool deref_final)
+{
+	int status;
+
+	/* Use "/" as the base if it is an absolute guest path. */
+	if (guest_path[0] == '/') {
+		strcpy(host_path, "/");
 	}
 	/* It is relative to the current working directory or to a
 	 * directory referred by a descriptors, see openat(2) for
 	 * details. */
+	else if (dir_fd == AT_FDCWD) {
+		status = getcwd2(tracee, host_path);
+		if (status < 0)
+			return status;
+	}
 	else {
+		char link[32]; /* 32 > sizeof("/proc//cwd") + sizeof(#ULONG_MAX) */
 		struct stat statl;
 
 		/* Format the path to the "virtual" link. */
-		if (dir_fd == AT_FDCWD)
-			status = snprintf(link, sizeof(link), "/proc/%d/cwd", pid);
-		else
-			status = snprintf(link, sizeof(link), "/proc/%d/fd/%d", pid, dir_fd);
+		status = snprintf(link, sizeof(link), "/proc/%d/fd/%d",	tracee->pid, dir_fd);
 		if (status < 0)
 			return -EPERM;
 		if (status >= sizeof(link))
 			return -EPERM;
 
 		/* Read the value of this "virtual" link. */
-		status = readlink(link, result, PATH_MAX);
+		status = readlink(link, host_path, PATH_MAX);
 		if (status < 0)
 			return -EPERM;
 		if (status >= PATH_MAX)
 			return -ENAMETOOLONG;
-		result[status] = '\0';
+		host_path[status] = '\0';
 
-		if (dir_fd != AT_FDCWD) {
-			/* Ensure it points to a directory. */
-			status = stat(result, &statl);
-			if (!S_ISDIR(statl.st_mode))
-				return -ENOTDIR;
-		}
+		/* Ensure it points to a directory. */
+		status = stat(host_path, &statl);
+		if (!S_ISDIR(statl.st_mode))
+			return -ENOTDIR;
 
 		/* Remove the leading "root" part of the base
 		 * (required!). */
-		status = detranslate_path(tracee, result, NULL);
+		status = detranslate_path(tracee, host_path, NULL);
 		if (status < 0)
 			return status;
 	}
 
-	VERBOSE(4, "pid %d: translate(\"%s\" + \"%s\")", pid, result, fake_path);
+	VERBOSE(tracee, 4, "pid %d: translate(\"%s\" + \"%s\")", tracee->pid, host_path, guest_path);
+
+	status = notify_extensions(tracee, GUEST_PATH, (intptr_t)host_path, (intptr_t)guest_path);
+	if (status < 0)
+		return status;
+	if (status > 0)
+		goto skip;
 
 	/* Canonicalize regarding the new root. */
-	status = canonicalize(tracee, fake_path, deref_final, result, 0);
+	status = canonicalize(tracee, guest_path, deref_final, host_path, 0);
 	if (status < 0)
 		return status;
 
-	/* Don't prepend the new root to the result of the
-	 * canonicalization if it is a binding, instead substitute the
-	 * binding location (leading part) with the real path.*/
-	if (substitute_binding(GUEST_SIDE, result) >= 0)
-		goto end;
-
-	strcpy(tmp, result);
-	status = join_paths(2, result, root, tmp);
+	/* Final binding substitution to convert "host_path" into a host
+	 * path, since canonicalize() works from the guest
+	 * point-of-view.  */
+	status = substitute_binding(tracee, GUEST, host_path);
 	if (status < 0)
 		return status;
 
-	/* Small sanity check. */
-	if (deref_final != 0
-	    && realpath(result, tmp) != NULL
-	    && !belongs_to_guestfs(tmp)) {
-		notice(WARNING, INTERNAL, "tracee %d is out of my control (2)", pid);
-		return -EPERM;
-	}
-
-end:
-	VERBOSE(4, "pid %d:          -> \"%s\"", pid, result);
+skip:
+	VERBOSE(tracee, 4, "pid %d:          -> \"%s\"", tracee->pid, host_path);
 	return 0;
 }
 
@@ -300,19 +400,13 @@ end:
  * including the end-of-string terminator.  On error it returns
  * -errno.
  */
-int detranslate_path(struct tracee_info *tracee, char path[PATH_MAX], const char t_referrer[PATH_MAX])
+int detranslate_path(Tracee *tracee, char path[PATH_MAX], const char t_referrer[PATH_MAX])
 {
 	size_t prefix_length;
 	size_t new_length;
 
 	bool sanity_check;
 	bool follow_binding;
-
-	assert(initialized);
-
-#if BENCHMARK_TRACEE_HANDLING
-	return 0;
-#endif
 
 	/* Don't try to detranslate relative paths (typically the
 	 * target of a relative symbolic link). */
@@ -321,7 +415,7 @@ int detranslate_path(struct tracee_info *tracee, char path[PATH_MAX], const char
 
 	/* Is it a symlink?  */
 	if (t_referrer != NULL) {
-		enum path_comparison comparison;
+		Comparison comparison;
 
 		sanity_check = false;
 		follow_binding = false;
@@ -345,12 +439,12 @@ int detranslate_path(struct tracee_info *tracee, char path[PATH_MAX], const char
 			 * file-system namespace by design. */
 			follow_binding = true;
 		}
-		else if (!belongs_to_guestfs(t_referrer)) {
+		else if (!belongs_to_guestfs(tracee, t_referrer)) {
 			const char *binding_referree;
 			const char *binding_referrer;
 
-			binding_referree = get_path_binding(HOST_SIDE, path);
-			binding_referrer = get_path_binding(HOST_SIDE, t_referrer);
+			binding_referree = get_path_binding(tracee, HOST, path);
+			binding_referrer = get_path_binding(tracee, HOST, t_referrer);
 			assert(binding_referrer != NULL);
 
 			/* Resolve bindings for symlinks that belong
@@ -373,7 +467,7 @@ int detranslate_path(struct tracee_info *tracee, char path[PATH_MAX], const char
 	}
 
 	if (follow_binding) {
-		switch (substitute_binding(HOST_SIDE, path)) {
+		switch (substitute_binding(tracee, HOST, path)) {
 		case 0:
 			return 0;
 		case 1:
@@ -383,12 +477,14 @@ int detranslate_path(struct tracee_info *tracee, char path[PATH_MAX], const char
 		}
 	}
 
-	switch (compare_paths2(root, root_length, path, strlen(path))) {
+	switch (compare_paths(get_root(tracee), path)) {
 	case PATH1_IS_PREFIX:
 		/* Remove the leading part, that is, the "root".  */
+		prefix_length = strlen(get_root(tracee));
 
 		/* Special case when path to the guest rootfs == "/". */
-		prefix_length = (root_length == 1 ? 0 : root_length);
+		if (prefix_length == 1)
+			prefix_length = 0;
 
 		new_length = strlen(path) - prefix_length;
 		memmove(path, path + prefix_length, new_length);
@@ -417,11 +513,11 @@ int detranslate_path(struct tracee_info *tracee, char path[PATH_MAX], const char
  * Check if the translated @t_path belongs to the guest rootfs, that
  * is, isn't from a binding.
  */
-bool belongs_to_guestfs(const char *t_path)
+bool belongs_to_guestfs(const Tracee *tracee, const char *host_path)
 {
-	enum path_comparison comparison;
+	Comparison comparison;
 
-	comparison = compare_paths2(root, root_length, t_path, strlen(t_path));
+	comparison = compare_paths(get_root(tracee), host_path);
 	return (comparison == PATHS_ARE_EQUAL || comparison == PATH1_IS_PREFIX);
 }
 
@@ -432,8 +528,7 @@ bool belongs_to_guestfs(const char *t_path)
  * This function works only with paths canonicalized in the same
  * namespace (host/guest)!
  */
-enum path_comparison compare_paths2(const char *path1, size_t length1,
-				const char *path2, size_t length2)
+Comparison compare_paths2(const char *path1, size_t length1, const char *path2, size_t length2)
 {
 	size_t length_min;
 	bool is_prefix;
@@ -443,6 +538,8 @@ enum path_comparison compare_paths2(const char *path1, size_t length1,
 	assert(length(path1) == length1);
 	assert(length(path2) == length2);
 #endif
+	assert(length1 > 0);
+	assert(length2 > 0);
 
 	if (!length1 || !length2) {
 		return PATHS_ARE_NOT_COMPARABLE;
@@ -484,19 +581,19 @@ enum path_comparison compare_paths2(const char *path1, size_t length1,
 	return PATHS_ARE_NOT_COMPARABLE;
 }
 
-enum path_comparison compare_paths(const char *path1, const char *path2)
+Comparison compare_paths(const char *path1, const char *path2)
 {
 	return compare_paths2(path1, strlen(path1), path2, strlen(path2));
 }
 
-typedef int (*foreach_fd_t)(pid_t pid, int fd, char path[PATH_MAX]);
+typedef int (*foreach_fd_t)(const Tracee *tracee, int fd, char path[PATH_MAX]);
 
 /**
  * Call @callback on each open file descriptors of @pid. It returns
  * the status of the first failure, that is, if @callback returned
  * seomthing lesser than 0, otherwise 0.
  */
-static int foreach_fd(pid_t pid, foreach_fd_t callback)
+static int foreach_fd(const Tracee *tracee, foreach_fd_t callback)
 {
 	struct dirent *dirent;
 	char path[PATH_MAX];
@@ -505,7 +602,7 @@ static int foreach_fd(pid_t pid, foreach_fd_t callback)
 	DIR *dirp;
 
 	/* Format the path to the "virtual" directory. */
-	status = snprintf(proc_fd, sizeof(proc_fd), "/proc/%d/fd", pid);
+	status = snprintf(proc_fd, sizeof(proc_fd), "/proc/%d/fd", tracee->pid);
 	if (status < 0 || status >= sizeof(proc_fd))
 		return 0;
 
@@ -535,7 +632,7 @@ static int foreach_fd(pid_t pid, foreach_fd_t callback)
 		if (path[0] != '/')
 			continue;
 
-		status = callback(pid, atoi(dirent->d_name), path);
+		status = callback(tracee, atoi(dirent->d_name), path);
 		if (status < 0)
 			goto end;
 	}
@@ -547,43 +644,17 @@ end:
 }
 
 /**
- * Helper for check_fd().
- */
-static int check_fd_callback(pid_t pid, int fd, char path[PATH_MAX])
-{
-	/* XXX TODO: don't warn for files that were open before the attach. */
-	if (!belongs_to_guestfs(path)) {
-		notice(WARNING, INTERNAL, "tracee %d is out of my control (3)", pid);
-		notice(WARNING, INTERNAL, "\"%s\" is not inside the new root (\"%s\")", path, root);
-		return -pid;
-	}
-	return 0;
-}
-
-/**
- * Check if the file descriptors open by the process @pid point into
- * the new root directory; it returns -@pid if it is not the case,
- * otherwise 0 (or if an ignored error occured).
- */
-int check_fd(pid_t pid)
-{
-	return foreach_fd(pid, check_fd_callback);
-}
-
-/**
- * Helper for list_open_fd().
- */
-static int list_open_fd_callback(pid_t pid, int fd, char path[PATH_MAX])
-{
-	VERBOSE(1, "pid %d: access to \"%s\" (fd %d) won't be translated until closed", pid, path, fd);
-	return 0;
-}
-
-/**
  * Warn for files that are open. It is useful right after PRoot has
  * attached a process.
  */
-int list_open_fd(pid_t pid)
+int list_open_fd(const Tracee *tracee)
 {
-	return foreach_fd(pid, list_open_fd_callback);
+	int list_open_fd_callback(const Tracee *tracee, int fd, char path[PATH_MAX])
+	{
+		VERBOSE(tracee, 1,
+			"pid %d: access to \"%s\" (fd %d) won't be translated until closed",
+			tracee->pid, path, fd);
+		return 0;
+	}
+	return foreach_fd(tracee, list_open_fd_callback);
 }
