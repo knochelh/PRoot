@@ -6,8 +6,8 @@
 ``chroot``, ``mount --bind``, and ``binfmt_misc`` without privilege/setup
 -------------------------------------------------------------------------
 
-:Date: 2012-08-15
-:Version: 2.2
+:Date: 2013-14-01
+:Version: 2.3.1
 :Manual section: 1
 
 
@@ -21,8 +21,8 @@ Description
 ===========
 
 PRoot is a user-space implementation of ``chroot``, ``mount --bind``,
-and ``binfmt_misc``.  This means that users don't need any privilege
-or setup to do things like: using an arbitrary directory as the new
+and ``binfmt_misc``.  This means that users don't need any privileges
+or setup to do things like using an arbitrary directory as the new
 root filesystem, making files accessible somewhere else in the
 filesystem hierarchy, or executing programs built for another CPU
 architecture transparently through QEMU user-mode.  Also, developers
@@ -446,4 +446,4 @@ Colophon
 ========
 
 Visit http://proot.me for help, bug reports, suggestions, patchs, ...
-Copyright (C) 2012 STMicroelectronics, licensed under GPL v2 or later.
+Copyright (C) 2013 STMicroelectronics, licensed under GPL v2 or later.

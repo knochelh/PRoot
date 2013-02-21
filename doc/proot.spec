@@ -1,4 +1,4 @@
-%define version v2.2
+%define version v2.3.1
 
 Summary   : chroot, mount --bind, and binfmt_misc without privilege/setup
 Version   : %{version}
@@ -10,13 +10,13 @@ Buildroot : %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 Prefix    : /usr
 Name      : proot
 
-# For testing purpose only
-BuildRequires: glibc-static
+Requires: libtalloc
+BuildRequires: pkgconfig libtalloc-devel glibc-static
 
 %description
 PRoot is a user-space implementation of chroot, mount --bind,
-and binfmt_misc.  This means that users don't need any privilege
-or setup to do things like: using an arbitrary directory as the new
+and binfmt_misc.  This means that users don't need any privileges
+or setup to do things like using an arbitrary directory as the new
 root filesystem, making files accessible somewhere else in the
 filesystem hierarchy, or executing programs built for another CPU
 architecture transparently through QEMU user-mode.  Also, developers

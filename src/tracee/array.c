@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -305,16 +305,21 @@ int resize_array(Array *array, size_t index, ssize_t delta_nb_entries)
  * pointer are copied.  This function returns -errno when an error
  * occured, otherwise 0.
  */
-int fetch_array(Array *array, Reg reg, size_t nb_entries)
+int fetch_array(Tracee *tracee, Array **array_, Reg reg, size_t nb_entries)
 {
 	word_t pointer = (word_t)-1;
 	word_t address;
+	Array *array;
 	int i;
 
-	assert(array != NULL);
-	assert(array->_cache == NULL);
+	assert(array_ != NULL);
 
-	address = peek_reg(TRACEE(array), CURRENT, reg);
+	*array_ = talloc_zero(tracee->ctx, Array);
+	if (*array_ == NULL)
+		return -ENOMEM;
+	array = *array_;
+
+	address = peek_reg(tracee, CURRENT, reg);
 
 	for (i = 0; nb_entries != 0 ? i < nb_entries : pointer != 0; i++) {
 		void *tmp = talloc_realloc(array, array->_cache, ArrayEntry, i + 1);
@@ -322,7 +327,7 @@ int fetch_array(Array *array, Reg reg, size_t nb_entries)
 			return -ENOMEM;
 		array->_cache = tmp;
 
-		pointer = peek_mem(TRACEE(array), address + i * sizeof_word(TRACEE(array)));
+		pointer = peek_mem(tracee, address + i * sizeof_word(tracee));
 		if (errno != 0)
 			return -EFAULT;
 
@@ -367,19 +372,19 @@ int push_array(Array *array, Reg reg)
 	tracee = TRACEE(array);
 
 	/* The pointer table is a POD array in the tracee's memory.  */
-	pod_array = talloc_zero_size(tracee->tmp, array->length * sizeof_word(TRACEE(array)));
+	pod_array = talloc_zero_size(tracee->ctx, array->length * sizeof_word(tracee));
 	if (pod_array == NULL)
 		return -ENOMEM;
 
 	/* There's one vector per modified item + one vector for the
 	 * pod array.  */
-	local = talloc_zero_array(tracee->tmp, struct iovec, array->length + 1);
+	local = talloc_zero_array(tracee->ctx, struct iovec, array->length + 1);
 	if (local == NULL)
 		return -ENOMEM;
 
 	/* The pod array is expected to be at the beginning of the
 	 * allocated memory by the caller.  */
-	total_size = array->length * sizeof_word(TRACEE(array));
+	total_size = array->length * sizeof_word(tracee);
 	local[0].iov_base = pod_array;
 	local[0].iov_len  = total_size;
 	local_count = 1;
@@ -412,7 +417,7 @@ int push_array(Array *array, Reg reg)
 
 	/* Modified items and the pod array are stored in a tracee's
 	 * memory block.  */
-	tracee_ptr = alloc_mem(TRACEE(array), total_size);
+	tracee_ptr = alloc_mem(tracee, total_size);
 	if (tracee_ptr == 0)
 		return -E2BIG;
 
@@ -422,17 +427,17 @@ int push_array(Array *array, Reg reg)
 		if (array->_cache[i].local != NULL)
 			array->_cache[i].remote += tracee_ptr;
 
-		if (is_32on64_mode(TRACEE(array)))
+		if (is_32on64_mode(tracee))
 			((uint32_t *)pod_array)[i] = array->_cache[i].remote;
 		else
 			pod_array[i] = array->_cache[i].remote;
 	}
 
 	/* Write all the modified items and the pod array at once.  */
-	status = writev_data(TRACEE(array), tracee_ptr, local, local_count);
+	status = writev_data(tracee, tracee_ptr, local, local_count);
 	if (status < 0)
 		return status;
 
-	poke_reg(TRACEE(array), reg, tracee_ptr);
+	poke_reg(tracee, reg, tracee_ptr);
 	return 0;
 }

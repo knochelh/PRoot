@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -189,8 +189,8 @@ static int translate_syscall_enter(Tracee *tracee)
 			peek_reg(tracee, CURRENT, SYSARG_5), peek_reg(tracee, CURRENT, SYSARG_6),
 			peek_reg(tracee, CURRENT, STACK_POINTER));
 	else
-		VERBOSE(tracee, 2, "pid %d: syscall(%d)", tracee->pid,
-			(int)peek_reg(tracee, CURRENT, SYSARG_NUM));
+		VERBOSE(tracee, 2, "pid %d: syscall(%ld)", tracee->pid,
+			peek_reg(tracee, CURRENT, SYSARG_NUM));
 
 	status = notify_extensions(tracee, SYSCALL_ENTER_START, 0, 0);
 	if (status < 0)

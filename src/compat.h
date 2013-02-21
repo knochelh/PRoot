@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -81,5 +81,10 @@
 #    ifndef ADDR_NO_RANDOMIZE
 #        define ADDR_NO_RANDOMIZE	0x0040000
 #    endif
-
+#    ifndef TALLOC_FREE
+#        define TALLOC_FREE(ctx) do { talloc_free(ctx); ctx = NULL; } while(0)
+#    endif
+#    ifndef talloc_get_type_abort
+#        define talloc_get_type_abort talloc_get_type
+#    endif
 #endif /* COMPAT_H */

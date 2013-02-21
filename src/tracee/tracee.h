@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -32,6 +32,7 @@
 #include <talloc.h>    /* talloc_*, */
 
 #include "arch.h" /* word_t, user_regs_struct, */
+#include "compat.h"
 
 typedef enum {
 	CURRENT  = 0,
@@ -92,10 +93,9 @@ typedef struct tracee {
 		SIGSTOP_PENDING,      /* Block SIGSTOP until the parent is unknown.  */
 	} sigstop;
 
-	/* Context used to collect all the temporary memory required
-	 * during the translation of a syscall (enter and exit
-	 * stages).  */
-	TALLOC_CTX *tmp;
+	/* Context used to collect all the temporary dynamic memory
+	 * allocations.  */
+	TALLOC_CTX *ctx;
 
 	/* Specify the type of the final component during the
 	 * initialization of a binding.  This variable is first
@@ -136,6 +136,9 @@ typedef struct tracee {
 	/* Runner command-line.  */
 	char **qemu;
 
+	/* Can the ELF interpreter for QEMU be safely skipped?  */
+	bool qemu_pie_workaround;
+
 	/* Path to glue between the guest rootfs and the host rootfs.  */
 	char *glue;
 
@@ -156,7 +159,7 @@ typedef struct tracee {
 
 #define TRACEE(a) talloc_get_type_abort(talloc_parent(talloc_parent(a)), Tracee)
 
-extern Tracee *get_tracee(pid_t pid, bool create);
+extern Tracee *get_tracee(const Tracee *tracee, pid_t pid, bool create);
 extern int inherit_config(Tracee *child, Tracee *parent, bool shared_fs);
 extern int swap_config(Tracee *tracee1, Tracee *tracee2);
 extern int parse_config(Tracee *tracee, int argc, char *argv[]);

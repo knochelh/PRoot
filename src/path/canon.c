@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -58,14 +58,8 @@ static inline int substitute_binding_stat(Tracee *tracee, Finality is_final,
 	if (status < 0)
 		return status;
 
-	/* Build the glue between the hostfs and the guestfs during
-	 * the initialization of a binding.  */
-	if (tracee->glue_type != 0) {
-		statl.st_mode = build_glue(tracee, guest_path, host_path, is_final);
-		if (statl.st_mode == 0)
-			status = -1;
-	}
-	else {
+	/* Don't notify extensions during the initialization of a binding.  */
+	if (tracee->glue_type == 0) {
 #ifdef ENABLE_ADDONS
 		status = syscall_addons_canon_host_enter(tracee, host_path);
 		if (status < 0)
@@ -75,9 +69,17 @@ static inline int substitute_binding_stat(Tracee *tracee, Finality is_final,
 		if (status < 0)
 			return status;
 #endif
+	}
 
-		statl.st_mode = 0;
-		status = lstat(host_path, &statl);
+	statl.st_mode = 0;
+	status = lstat(host_path, &statl);
+
+	/* Build the glue between the hostfs and the guestfs during
+	 * the initialization of a binding.  */
+	if (status < 0 && tracee->glue_type != 0) {
+		statl.st_mode = build_glue(tracee, guest_path, host_path, is_final);
+		if (statl.st_mode == 0)
+			status = -1;
 	}
 
 	/* Return an error if a non-final component isn't a

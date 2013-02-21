@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -35,6 +35,8 @@
 #include "extension/extension.h"
 #include "notice.h"
 
+#include "compat.h"
+
 typedef LIST_HEAD(tracees, tracee) Tracees;
 static Tracees tracees;
 
@@ -60,8 +62,8 @@ static Tracee *new_tracee(pid_t pid)
 	talloc_set_destructor(tracee, remove_tracee);
 
 	/* Allocate a memory collector.  */
-	tracee->tmp = talloc_new(tracee);
-	if (tracee->tmp == NULL)
+	tracee->ctx = talloc_new(tracee);
+	if (tracee->ctx == NULL)
 		goto no_mem;
 
 	/* By default new tracees have an empty file-system
@@ -76,8 +78,7 @@ static Tracee *new_tracee(pid_t pid)
 	return tracee;
 
 no_mem:
-	TALLOC_FREE(tracee->fs);
-	TALLOC_FREE(tracee->tmp);
+	TALLOC_FREE(tracee);
 	return NULL;
 }
 
@@ -86,15 +87,21 @@ no_mem:
  * found, a new one is created if @create is true, otherwise NULL is
  * returned.
  */
-Tracee *get_tracee(pid_t pid, bool create)
+Tracee *get_tracee(const Tracee *current_tracee, pid_t pid, bool create)
 {
 	Tracee *tracee;
+
+	/* Don't reset the memory collector if the searched tracee is
+	 * the current one: there's likely pointers to the
+	 * sub-allocated data in the caller.  */
+	if (current_tracee != NULL && current_tracee->pid == pid)
+		return (Tracee *)current_tracee;
 
 	LIST_FOREACH(tracee, &tracees, link)
 		if (tracee->pid == pid) {
 			/* Flush then allocate a new memory collector.  */
-			TALLOC_FREE(tracee->tmp);
-			tracee->tmp = talloc_new(tracee);
+			TALLOC_FREE(tracee->ctx);
+			tracee->ctx = talloc_new(tracee);
 
 			return tracee;
 		}
@@ -166,6 +173,7 @@ int inherit_config(Tracee *child, Tracee *parent, bool shared_fs)
 	child->exe = talloc_reference(child, parent->exe);
 	child->cmdline = talloc_reference(child, parent->cmdline);
 
+	child->qemu_pie_workaround = parent->qemu_pie_workaround;
 	child->qemu = talloc_reference(child, parent->qemu);
 	child->glue = talloc_reference(child, parent->glue);
 
@@ -194,12 +202,14 @@ int swap_config(Tracee *tracee1, Tracee *tracee2)
 {
 	Tracee *tmp;
 
-	tmp = talloc_zero(tracee1->tmp, Tracee);
+	tmp = talloc_zero(tracee1->ctx, Tracee);
 	if (tmp == NULL)
 		return -ENOMEM;
 
+#if defined(TALLOC_VERSION_MAJOR) && TALLOC_VERSION_MAJOR >= 2
 	void reparent_config(Tracee *new_parent, Tracee *old_parent) {
 		new_parent->verbose = old_parent->verbose;
+		new_parent->qemu_pie_workaround = old_parent->qemu_pie_workaround;
 
 		#define REPARENT(field) do {						\
 			talloc_reparent(old_parent, new_parent, old_parent->field);	\
@@ -219,6 +229,9 @@ int swap_config(Tracee *tracee1, Tracee *tracee2)
 	reparent_config(tracee2, tmp);
 
 	return 0;
+#else
+	return -ENOSYS;
+#endif
 }
 
 /* Send the KILL signal to all tracees.  */

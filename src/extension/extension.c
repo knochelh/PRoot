@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -27,6 +27,8 @@
 
 #include "extension/extension.h"
 #include "notice.h"
+
+#include "compat.h"
 
 /**
  * Remove an @extension from its tracee's list, then send it the

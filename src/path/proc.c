@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -76,7 +76,7 @@ Action readlink_proc(const Tracee *tracee, char result[PATH_MAX],
 	if (pid == 0)
 		return DEFAULT;
 
-	known_tracee = get_tracee(pid, false);
+	known_tracee = get_tracee(tracee, pid, false);
 	if (!known_tracee)
 		return DEFAULT;
 

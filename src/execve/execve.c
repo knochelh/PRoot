@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -195,7 +195,7 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, Array *envp, const cha
 		return 0;
 
 	/* Rebuild a POD argv[], as expected by parse_config().  */
-	argv_pod = talloc_size(tracee->tmp, argv->length * sizeof(char **));
+	argv_pod = talloc_size(tracee->ctx, argv->length * sizeof(char **));
 	if (argv_pod == NULL)
 		return -ENOMEM;
 
@@ -207,7 +207,7 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, Array *envp, const cha
 
 	/* This dummy tracee holds the new configuration that will be copied
 	 * back to the original tracee if everything is OK.  */
-	dummy = talloc_zero(tracee->tmp, Tracee);
+	dummy = talloc_zero(tracee->ctx, Tracee);
 	if (dummy == NULL)
 		return -ENOMEM;
 
@@ -215,8 +215,8 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, Array *envp, const cha
 	if (dummy->fs == NULL)
 		return -ENOMEM;
 
-	dummy->tmp = talloc_new(dummy);
-	if (dummy->tmp == NULL)
+	dummy->ctx = talloc_new(dummy);
+	if (dummy->ctx == NULL)
 		return -ENOMEM;
 
 	/* Inform parse_config() that paths are relative to the current tracee.
@@ -336,11 +336,7 @@ int translate_execve(Tracee *tracee)
 	if (status < 0)
 		return status;
 
-	argv = talloc_zero(tracee->tmp, Array);
-	if (argv == NULL)
-		return -ENOMEM;
-
-	status = fetch_array(argv, SYSARG_2, 0);
+	status = fetch_array(tracee, &argv, SYSARG_2, 0);
 	if (status < 0)
 		return status;
 
@@ -352,13 +348,9 @@ int translate_execve(Tracee *tracee)
 		/* Save the initial argv[0] since it will be replaced
 		 * by tracee->qemu[0].  Errors are not fatal here.  */
 		if (argv0 != NULL)
-			argv0 = talloc_strdup(tracee->tmp, argv0);
+			argv0 = talloc_strdup(tracee->ctx, argv0);
 
-		envp = talloc_zero(tracee->tmp, Array);
-		if (envp == NULL)
-			return -ENOMEM;
-
-		status = fetch_array(envp, SYSARG_3, 0);
+		status = fetch_array(tracee, &envp, SYSARG_3, 0);
 		if (status < 0)
 			return status;
 
@@ -386,12 +378,12 @@ int translate_execve(Tracee *tracee)
 	strcpy(u_path, t_interp);
 	(void) detranslate_path(tracee, u_path, NULL);
 
-	new_exe = talloc_strdup(tracee->tmp, u_path);
+	new_exe = talloc_strdup(tracee->ctx, u_path);
 	if (new_exe == NULL)
 		return -ENOMEM;
 
 	/* Remember the value for "/proc/self/cmdline".  */
-	new_cmdline = talloc_zero_array(tracee->tmp, char *, argv->length);
+	new_cmdline = talloc_zero_array(tracee->ctx, char *, argv->length);
 	if (new_cmdline == NULL)
 		return -ENOMEM;
 
@@ -464,7 +456,7 @@ int translate_execve(Tracee *tracee)
 	 * host rootfs") or if there's no need for RPATH inhibition in
 	 * mixed-mode.  */
 	ignore_elf_interpreter = (compare_paths(get_root(tracee), "/") == PATHS_ARE_EQUAL
-				  || (tracee->qemu != NULL && !inhibit_rpath));
+				  || (tracee->qemu_pie_workaround && !inhibit_rpath));
 
 	tracee->forced_elf_interpreter = !ignore_elf_interpreter;
 

@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -34,6 +34,8 @@
 #include "path/path.h"
 #include "path/canon.h"
 #include "notice.h"
+
+#include "compat.h"
 
 #define HEAD(tracee, side)						\
 	(side == GUEST							\
@@ -197,6 +199,9 @@ const char *get_path_binding(Tracee *tracee, Side side, const char path[PATH_MAX
 const char *get_root(const Tracee* tracee)
 {
 	const Binding *binding;
+
+	if (tracee == NULL || tracee->fs == NULL)
+		return NULL;
 
 	if (tracee->fs->bindings.guest == NULL) {
 		if (tracee->fs->bindings.pending == NULL
@@ -485,7 +490,7 @@ Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool m
 	}
 
 	/* Allocate an empty binding.  */
-	binding = talloc_zero(tracee->tmp, Binding);
+	binding = talloc_zero(tracee->ctx, Binding);
 	if (binding == NULL)
 		return NULL;
 
@@ -660,7 +665,7 @@ static void add_induced_bindings(Tracee *tracee, const Binding *new_binding)
 		 *
 		 *     -b /home/ced:/media/local/ced
 		 */
-		induced_binding = talloc_zero(tracee->tmp, Binding);
+		induced_binding = talloc_zero(tracee->ctx, Binding);
 		if (induced_binding == NULL)
 			continue;
 

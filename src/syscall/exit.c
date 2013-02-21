@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -225,14 +225,14 @@ case PR_clone: {
 		goto end;
 	}
 
-	child = get_tracee(result, true);
+	child = get_tracee(tracee, result, true);
 	if (child == NULL) {
 		status = -ENOMEM;
 		break;
 	}
 
 	if (peek_reg(tracee, ORIGINAL, SYSARG_NUM) == PR_clone)
-		flags = peek_reg(tracee, ORIGINAL, SYSARG_2);
+		flags = peek_reg(tracee, ORIGINAL, SYSARG_1);
 	else
 		flags = 0;
 

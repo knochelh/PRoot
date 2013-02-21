@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -339,7 +339,7 @@ int event_loop()
 		}
 
 		/* Get the information about this tracee. */
-		tracee = get_tracee(pid, true);
+		tracee = get_tracee(NULL, pid, true);
 		assert(tracee != NULL);
 
 		status = notify_extensions(tracee, NEW_STATUS, tracee_status, 0);
@@ -354,7 +354,8 @@ int event_loop()
 			continue; /* Skip the call to ptrace(SYSCALL). */
 		}
 		else if (WIFSIGNALED(tracee_status)) {
-			VERBOSE(tracee, 1, "pid %d: terminated with signal %d",
+			VERBOSE(tracee, (int) (last_exit_status != -1),
+				"pid %d: terminated with signal %d",
 				pid, WTERMSIG(tracee_status));
 			TALLOC_FREE(tracee);
 			continue; /* Skip the call to ptrace(SYSCALL). */
@@ -425,7 +426,7 @@ int event_loop()
 					break;
 				}
 
-				child_tracee = get_tracee(child_pid, true);
+				child_tracee = get_tracee(tracee, child_pid, true);
 				if (child_tracee == NULL) {
 					notice(tracee, WARNING, SYSTEM, "running out of memory");
 					break;

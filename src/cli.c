@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2010, 2011, 2012 STMicroelectronics
+ * Copyright (C) 2013 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -48,6 +48,8 @@
 #include "tracee/event.h"
 #include "extension/extension.h"
 #include "build.h"
+
+#include "compat.h"
 
 static int handle_option_r(Tracee *tracee, char *value)
 {
@@ -466,10 +468,43 @@ static int initialize_command(Tracee *tracee, char *const *cmdline)
 	if (status < 0)
 		return -1;
 
+	/* Actually tracee->qemu[0] has to be a host path from the tracee's
+	 * point-of-view, not from the PRoot's point-of-view.  See
+	 * translate_execve() for details.  */
+	if (tracee->reconf.tracee != NULL) {
+		status = detranslate_path(tracee->reconf.tracee, path, NULL);
+		if (status < 0)
+			return -1;
+	}
+
 	tracee->qemu[0] = talloc_strdup(tracee->qemu, path);
 	if (tracee->qemu[0] == NULL)
 		return -1;
 
+	/**
+	 * There's a bug when using the ELF interpreter as a loader (as PRoot
+	 * does) on PIE programs that uses constructors (typically QEMU v1.1+).
+	 * In this case, constructors are called twice as you can see on the
+	 * test below:
+	 *
+	 *     $ cat test.c
+	 *     static void __attribute__((constructor)) init(void) { puts("OK"); }
+	 *     int main() { return 0; }
+	 *
+	 *     $ gcc -fPIC -pie test.c -o test
+	 *     $ ./test
+	 *     OK
+	 *
+	 *     $ /lib64/ld-linux-x86-64.so.2 ./test
+	 *     OK
+	 *     OK
+	 *
+	 * Actually, PRoot doesn't have to use the ELF interpreter as a loader
+	 * if QEMU isn't nested.  When QEMU is nested (sub reconfiguration), the
+	 * user has to use either a version of QEMU prior v1.1 or a version of
+	 * QEMU compiled with the --disable-pie option.
+	 */
+	tracee->qemu_pie_workaround = (tracee->reconf.tracee == NULL);
 	return 0;
 }
 
@@ -626,10 +661,13 @@ int main(int argc, char *argv[])
 
 	/* Configure the memory allocator.  */
 	talloc_enable_leak_report();
+
+#if defined(TALLOC_VERSION_MAJOR) && TALLOC_VERSION_MAJOR >= 2
 	talloc_set_log_stderr();
+#endif
 
 	/* Pre-create the first tracee (pid == 0).  */
-	tracee = get_tracee(0, true);
+	tracee = get_tracee(NULL, 0, true);
 	if (tracee == NULL)
 		goto error;
 	tracee->pid = getpid();
