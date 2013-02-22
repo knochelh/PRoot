@@ -36,10 +36,6 @@
 #include "path/proc.h"
 #include "extension/extension.h"
 
-#ifdef ENABLE_ADDONS
-#include "addons/syscall_addons.h"
-#endif
-
 /**
  * Resolve bindings (if any) in @guest_path and copy the translated
  * path into @host_path.  Also, this function checks that a non-final
@@ -60,15 +56,9 @@ static inline int substitute_binding_stat(Tracee *tracee, Finality is_final,
 
 	/* Don't notify extensions during the initialization of a binding.  */
 	if (tracee->glue_type == 0) {
-#ifdef ENABLE_ADDONS
-		status = syscall_addons_canon_host_enter(tracee, host_path);
-		if (status < 0)
-			return status;
-#else
 		status = notify_extensions(tracee, HOST_PATH, (intptr_t)host_path, is_final);
 		if (status < 0)
 			return status;
-#endif
 	}
 
 	statl.st_mode = 0;

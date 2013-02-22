@@ -29,10 +29,12 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include "tracee/info.h"
-#include "tracee/ureg.h"
+
+#include "tracee/tracee.h"
+#include "tracee/reg.h"
 #include "syscall/syscall.h"
 #include "addons/syscall_addons.h"
+#include "extension/extension.h"
 
 
 /**
@@ -47,14 +49,14 @@ static int verbose;
 /**
  * Simple output of syscall number and name with arguments.
  */
-static int addon_enter(struct tracee_info *tracee)
+static int addon_enter(Tracee *tracee)
 {
 	VERBOSE("pid %d: syscall(%ld, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx) [0x%lx]\n",
-		tracee->pid, tracee->sysnum,
-		peek_ureg(tracee, SYSARG_1), peek_ureg(tracee, SYSARG_2),
-		peek_ureg(tracee, SYSARG_3), peek_ureg(tracee, SYSARG_4),
-		peek_ureg(tracee, SYSARG_5), peek_ureg(tracee, SYSARG_6),
-		peek_ureg(tracee, STACK_POINTER));
+		tracee->pid, peek_reg(tracee, CURRENT, SYSARG_NUM),
+		peek_reg(tracee, CURRENT, SYSARG_1), peek_reg(tracee, CURRENT, SYSARG_2),
+		peek_reg(tracee, CURRENT, SYSARG_3), peek_reg(tracee, CURRENT, SYSARG_4),
+		peek_reg(tracee, CURRENT, SYSARG_5), peek_reg(tracee, CURRENT, SYSARG_6),
+		peek_reg(tracee, CURRENT, STACK_POINTER));
 	return 0;
 }
 
@@ -62,10 +64,11 @@ static int addon_enter(struct tracee_info *tracee)
 /**
  * Simple output of syscall result.
  */
-static int addon_exit(struct tracee_info *tracee)
+static int addon_exit(Tracee *tracee)
 {
 	VERBOSE("pid %d:        -> 0x%lx [0x%lx]\n", tracee->pid, 
-		peek_ureg(tracee, SYSARG_RESULT), peek_ureg(tracee, STACK_POINTER));
+		peek_reg(tracee, CURRENT, SYSARG_RESULT),
+		peek_reg(tracee, CURRENT, STACK_POINTER));
 	return 0;
 }
 
@@ -73,10 +76,35 @@ static int addon_exit(struct tracee_info *tracee)
 /**
  * Register the current addon through a constructor function.
  */
-static struct addon_info addon = { &addon_enter, &addon_exit };
+static int trace_callback(Extension *extension, ExtensionEvent event,
+			intptr_t data1, intptr_t data2);
+
+static struct addon_info addon = { "trace", trace_callback };
 
 static void __attribute__((constructor)) register_addon(void)
 {
 	syscall_addons_register(&addon);
-	verbose = getenv("PROOT_ADDON_TRACE") != NULL;
+}
+
+static int trace_callback(Extension *extension, ExtensionEvent event,
+			intptr_t data1, intptr_t data2)
+{
+	Tracee *tracee = TRACEE(extension);
+
+	switch (event) {
+	case INITIALIZATION:
+		verbose = getenv("PROOT_ADDON_TRACE") != NULL;
+		break;
+
+	case SYSCALL_ENTER_END:
+		return addon_enter(tracee);
+
+	case SYSCALL_EXIT_START:
+		return addon_exit(tracee);
+
+	default:
+		break;
+	}
+
+	return 0;
 }

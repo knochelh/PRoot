@@ -35,12 +35,12 @@
 #include <sys/stat.h>    /* fstatat(2), */
 #include <libgen.h>      /* basename(3), dirname(3), */
 #include <errno.h>       /* errno, ENOENT */
+#include <linux/limits.h> /* PATH_MAX, ARG_MAX, */
 
 #include "notice.h"
-#include "execve/args.h"
-#include "config.h"
 #include "addons/syscall_addons.h"
 #include "cec_lib.h"
+#include "extension/extension.h"
 
 extern char **environ;
 
@@ -80,8 +80,10 @@ static const char *replay_replace_env[] = {
 	NULL
 };
 
+static void care_write_script(const Tracee *tracee);
+
 /* XXX.  */
-static bool care_init()
+static bool care_init(const Tracee *tracee)
 {
 	const char *option;
 	bool script_exists;
@@ -90,15 +92,15 @@ static bool care_init()
 	/* XXX.  */
 	hash_table = cec_hash_new(cec_hash_string, cec_compare_strings, cec_free_element);
 	if (hash_table == NULL) {
-		notice(WARNING, INTERNAL, "care: XXXa");
+		notice(tracee, WARNING, INTERNAL, "care: XXXa");
 		return false;
 	}
 
 	/* XXX.  */
 	option = getenv("PROOT_CARE_VERBOSE");
 	verbose_level = option ? atoi(option) : 0;
-	if (config.verbose_level > verbose_level)
-		verbose_level = config.verbose_level;
+	if (tracee->verbose > verbose_level)
+		verbose_level = tracee->verbose;
 
 	/* XXX.  */
 	option = getenv("PROOT_CARE_SCRIPT") ?: "/tmp/care.sh";
@@ -106,18 +108,18 @@ static bool care_init()
 
 	script = fopen(option, "we");
 	if (script == NULL) {
-		notice(WARNING, SYSTEM, "care: open(\"%s\") for writing", option);
+		notice(tracee, WARNING, SYSTEM, "care: open(\"%s\") for writing", option);
 		return false;
 	}
 
 	if (verbose_level > 0)
-		notice(INFO, USER, "care: %s execution information in: %s",
+		notice(tracee, INFO, USER, "care: %s execution information in: %s",
 		       script_exists ? "overwriting (!)" : "writing", option);
 
 	/* XXX.  */
 	option = getenv("PROOT_CARE_ARCHIVE") ?: "/tmp/care.cpio";
 	if (strlen(option) >= PATH_MAX) {
-		notice(WARNING, USER, "care: archive option is too long");
+		notice(tracee, WARNING, USER, "care: archive option is too long");
 		return false;
 	}
 	strcpy(archive, option);
@@ -128,23 +130,23 @@ static bool care_init()
 	if (archive_dir_fd < 0) {
 		status = mkdirat(AT_FDCWD, archive, 0755);
 		if (status < 0) {
-			notice(WARNING, INTERNAL, "care: can't create archive dir: %s", archive);
+			notice(tracee, WARNING, INTERNAL, "care: can't create archive dir: %s", archive);
 			return false;
 		}
 		archive_dir_fd = openat(AT_FDCWD, archive, 0);
 		if (archive_dir_fd < 0) {
-			notice(WARNING, INTERNAL, "care: can't open archive dir: %s", archive);
+			notice(tracee, WARNING, INTERNAL, "care: can't open archive dir: %s", archive);
 			return false;
 		}
 	} else {
 		struct stat stat_buf;
 		status = fstatat(AT_FDCWD, archive, &stat_buf, 0);
 		if (status < 0) {
-			notice(WARNING, INTERNAL, "care: can't stat archive dir: %s", archive);
+			notice(tracee, WARNING, INTERNAL, "care: can't stat archive dir: %s", archive);
 			return false;
 		}
 		if (!S_ISDIR(stat_buf.st_mode)) {
-			notice(WARNING, INTERNAL, "care: archive is not a directory: %s", archive);
+			notice(tracee, WARNING, INTERNAL, "care: archive is not a directory: %s", archive);
 			return false;
 		}
 		append = true;
@@ -154,23 +156,25 @@ static bool care_init()
 	if (status < 0) {
 		status = open(archive, O_CREAT|O_RDWR|O_TRUNC);
 		if (status < 0) {
-			notice(WARNING, SYSTEM, "care: creat(\"%s\")", archive);
+			notice(tracee, WARNING, SYSTEM, "care: creat(\"%s\")", archive);
 			return false;
 		}
 		close(status);
 
 		status = unlink(archive);
 		if (status < 0) {
-			notice(WARNING, SYSTEM, "care: unlink(\"%s\")", archive);
+			notice(tracee, WARNING, SYSTEM, "care: unlink(\"%s\")", archive);
 			return false;
 		}
 	}
 	else
 		append = true;
 #endif
-	if (verbose_level > 0)
-		notice(INFO, USER, "care: %s data in: %s",
+	if (tracee->verbose > 0)
+		notice(tracee, INFO, USER, "care: %s data in: %s",
 		       append ? "appending (!)" : "writing", option);
+
+	care_write_script(tracee);
 
 	return true;
 }
@@ -278,7 +282,7 @@ static int copyat_reg(int srcdirfd, const char *srcpath, int dstdirfd, const cha
 
 
 /* XXX.  */
-static void care_archive(const char *path)
+static void care_archive(const Tracee *tracee, const char *path)
 {
 	int status;
 #ifdef CARE_NO_CPIO		
@@ -303,7 +307,7 @@ static void care_archive(const char *path)
 #ifdef CARE_NO_CPIO		
 	status = fstatat(AT_FDCWD, path, &stat_buf, AT_SYMLINK_NOFOLLOW);
 	if (status < 0) {
-		notice(WARNING, INTERNAL, "care: can't stat %s", path);
+		notice(tracee, WARNING, INTERNAL, "care: can't stat %s", path);
 		return;
 	}
 	if (S_ISREG(stat_buf.st_mode) || S_ISLNK(stat_buf.st_mode)) {
@@ -313,38 +317,38 @@ static void care_archive(const char *path)
 		int dir_fd;
 		dir_fd = recmkdirat(archive_dir_fd, dir);
 		if (dir_fd < 0) {
-			notice(WARNING, INTERNAL, "care: can't archive directory: %s", dir);
+			notice(tracee, WARNING, INTERNAL, "care: can't archive directory: %s", dir);
 			goto free_buffer;
 		}
 		status = unlinkat(dir_fd, base, 0);
 		if (status < 0 && errno != ENOENT) {
-			notice(WARNING, INTERNAL, "care: can't unlink archive file: %s", path);
+			notice(tracee, WARNING, INTERNAL, "care: can't unlink archive file: %s", path);
 			goto free_fd;
 		}
 		if (S_ISREG(stat_buf.st_mode)) {
 			status = copyat_reg(AT_FDCWD, path, dir_fd, base);
 			if (status < 0) {
-				notice(WARNING, INTERNAL, "care: can't copy file to archive: %s", path);
+				notice(tracee, WARNING, INTERNAL, "care: can't copy file to archive: %s", path);
 				goto free_fd;
 			}
 			status = fchmodat(dir_fd, base, stat_buf.st_mode & 0777, 0);
 			if (status < 0) 
-				notice(WARNING, INTERNAL, "care: can't set permission for archive file: %s", path);
+				notice(tracee, WARNING, INTERNAL, "care: can't set permission for archive file: %s", path);
 		} else if (S_ISLNK(stat_buf.st_mode)) {
 			status = readlinkat(AT_FDCWD, path, link_buffer, sizeof(link_buffer));
 			if (status < 0 || status >= sizeof(link_buffer)) {
-				notice(WARNING, INTERNAL, "care: can't read link: %s", path);
+				notice(tracee, WARNING, INTERNAL, "care: can't read link: %s", path);
 				goto free_fd;
 			}
 			link_buffer[status] = '\0';
 			status = symlinkat(link_buffer, dir_fd, base);
 			if (status < 0) {
-				notice(WARNING, INTERNAL, "care: can't add link to archive: %s", path);
+				notice(tracee, WARNING, INTERNAL, "care: can't add link to archive: %s", path);
 				goto free_fd;
 			}
 		}
 		if (status < 0) 
-			notice(WARNING, INTERNAL, "care: can't archive file: %s", path);
+			notice(tracee, WARNING, INTERNAL, "care: can't archive file: %s", path);
 	free_fd:
 		if (dir_fd != archive_dir_fd) 
 			close(dir_fd);
@@ -353,7 +357,7 @@ static void care_archive(const char *path)
 	} else if (S_ISDIR(stat_buf.st_mode)) {
 		int fd = recmkdirat(archive_dir_fd, path);
 		if (fd < 0) {
-			notice(WARNING, INTERNAL, "care: can't archive directory: %s", path);
+			notice(tracee, WARNING, INTERNAL, "care: can't archive directory: %s", path);
 			return;
 		}
 		if (fd != archive_dir_fd) 
@@ -367,11 +371,11 @@ static void care_archive(const char *path)
 			archive,
 			verbose_level ? "" : "--quiet >/dev/null 2>&1");
 	if (status < 0) {
-		notice(WARNING, SYSTEM, "care: can't build cpio command");
+		notice(tracee, WARNING, SYSTEM, "care: can't build cpio command");
 		return;
 	}
 	if (status >= sizeof(command)) {
-		notice(WARNING, INTERNAL, "care: internal error with cpio command");
+		notice(tracee, WARNING, INTERNAL, "care: internal error with cpio command");
 		return;
 	}
 
@@ -381,7 +385,7 @@ static void care_archive(const char *path)
 	/* XXX.  */
 	status = system(command); 
 	if (status != 0) {
-		notice(WARNING, INTERNAL, "care: can't exec cpio command");
+		notice(tracee, WARNING, INTERNAL, "care: can't exec cpio command");
 		return;
 	}
 	append = true;
@@ -389,7 +393,7 @@ static void care_archive(const char *path)
 }
 
 /* XXX.  */
-static void care_write_script()
+static void care_write_script(const Tracee *tracee)
 {
 	struct utsname utsname;
 	char argv0[PATH_MAX];
@@ -398,11 +402,8 @@ static void care_write_script()
 
 	/* Force archive of replay bindings to avoid proot warnings at replay time. */
 	for(i = 0; replay_bindings[i] != NULL; i++) {
-		care_archive(replay_bindings[i]);
+		care_archive(tracee, replay_bindings[i]);
 	}
-
-	/* Destroy hash table. */
-	cec_hash_del(hash_table);
 
 	// XXX Create run.sh */
 	fprintf(script, "#!/bin/sh\n");
@@ -444,7 +445,7 @@ static void care_write_script()
 
 	status = readlink("/proc/self/exe", argv0, PATH_MAX);
 	if (status < 0) {
-		notice(WARNING, SYSTEM, "care: XXX");
+		notice(tracee, WARNING, SYSTEM, "care: XXX");
 		strcpy(argv0, "proot");
 	}
 
@@ -466,103 +467,80 @@ static void care_write_script()
 
 	status = uname(&utsname);
 	if (status < 0)
-		notice(WARNING, SYSTEM, "care: XXX");
+		notice(tracee, WARNING, SYSTEM, "care: XXX");
 	else
 		fprintf(script, "\t-k '%s' \\\n", utsname.release);
 
-	if (config.initial_cwd)
-		fprintf(script, "\t-w '%s' \\\n", config.initial_cwd);
+	fprintf(script, "\t-w '%s' \\\n", tracee->fs->cwd);
 
-	if (config.qemu) {
+	if (tracee->qemu) {
 		fprintf(script, "\t-q ");
-		for (i = 0; config.qemu[i] != NULL; i++)
-			fprintf(script, "'%s' ", config.qemu[i]);
+		for (i = 0; tracee->qemu[i] != NULL; i++)
+			fprintf(script, "'%s' ", tracee->qemu[i]);
 		fprintf(script, "\\\n");
 	}
 
-	if (config.allow_unknown_syscalls)
-		fprintf(script, "\t-u \\\n");
-
-	if (config.disable_aslr)
-		fprintf(script, "\t-a \\\n");
-
+#if 0 /* TODO */
 	if (config.fake_id0)
 		fprintf(script, "\t-0 \\\n");
+#endif
 
-	if (config.verbose_level) {
-		fprintf(script, "\t");
-		for (i = config.verbose_level; i > 0; i--)
-			fprintf(script, "-v ");
-		fprintf(script, "\\\n");
-	}
+	fprintf(script, "\t-v %d\\\n", tracee->verbose);
 
 	fprintf(script, "\t\"${ROOTFS-$dir}\" \\\n");
 
 	fprintf(script, "\t");
-	for (i = 0; config.command && config.command[i] != NULL; i++)
-		fprintf(script, "'%s' ", config.command[i]);
+	for (i = 0; tracee->cmdline && tracee->cmdline[i] != NULL; i++)
+		fprintf(script, "'%s' ", tracee->cmdline[i]);
 	fprintf(script, "\\\n");
 
 }
 
-#ifdef ENABLE_ADDONS
 /**
  * Register the current addon through a constructor function.
  */
-static int addon_canon_host_enter(struct tracee_info *tracee, char *real_path);
+static int care_callback(Extension *extension, ExtensionEvent event,
+			intptr_t data1, intptr_t data2);
 
-static struct addon_info addon = { NULL, NULL, NULL,  &addon_canon_host_enter};
+static struct addon_info addon = { "care", care_callback };
 
 static void __attribute__((constructor)) init(void)
 {
 	syscall_addons_register(&addon);
-	active = getenv("PROOT_ADDON_CARE") != NULL;
-	if (active) {
-		if (!care_init()) {
-			exit(1);
-		}
-	}
 }
 
 static void __attribute__((destructor)) fini(void)
 {
-	if (active)
-		care_write_script();
+	/* Destroy hash table. */
+	if (hash_table != NULL)
+		cec_hash_del(hash_table);
 }
 
-static int addon_canon_host_enter(struct tracee_info *tracee, char *real_path)
+static int care_callback(Extension *extension, ExtensionEvent event,
+			intptr_t data1, intptr_t data2)
 {
-	if (active)
-		care_archive(real_path);
-	return 0;
-}
-#else
-bool callback(enum plugin_event event, struct tracee_info *tracee, intptr_t data)
-{
+	Tracee *tracee = TRACEE(extension);
+
 	switch (event) {
-	case PRINT_HELP:
-		puts("XXX help");
+	case INITIALIZATION:
+		active = getenv("PROOT_ADDON_CARE") != NULL;
+		if (!active)
+			break;
+
+		if (!care_init(tracee))
+			return -1;
 		break;
 
-	case PRINT_INFO:
-		puts("XXX info");
+	case HOST_PATH:
+		if (!active)
+			break;
+
+		care_archive(tracee, (const char *) data1);
 		break;
-
-	case LOADED:
-		return care_init();
-
-	case CANON_HOST_ENTRY:
-		care_archive((char *)data);
-		return true;
-
-	case TRACING_END:
-		care_write_script();
-		return true;
 
 	default:
 		break;
 	}
 
-	return true;
+	return 0;
 }
-#endif

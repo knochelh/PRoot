@@ -34,11 +34,16 @@
 #include <regex.h> /* regcomp, regexec, regfree (3p) */
 #include <libgen.h> /* basename (3p) */
 #include <errno.h> /* ENOMEM */
-#include "tracee/info.h"
-#include "tracee/ureg.h"
+#include <assert.h>
+
+#include "tracee/tracee.h"
+#include "tracee/reg.h"
 #include "syscall/syscall.h"
-#include "execve/args.h"
+#include "tracee/array.h"
+#include "tracee/abi.h"
+#include "execve/ldso.h"
 #include "addons/syscall_addons.h"
+#include "extension/extension.h"
 
 /**
  * Defines OUTPUT macro for all addon outputs.
@@ -59,32 +64,23 @@ static char **opt_args;
 static char *opts;
 static char *driver_cmd;
 
-/**
- * Get current dir for the specified process.
- */
-static int get_pid_cwd(int pid, char path[PATH_MAX])
-{
-	char buffer[256];
-	int n;
-	snprintf(buffer, sizeof(buffer), "/proc/%d/cwd", pid);
-	if ((n = readlink(buffer, path, PATH_MAX-1)) == -1) {
-		return -1;
-	}
-	path[n] = '\0';
-	return 0;
-}
-
-
 /** 
  * Format args.
  */
-static void format_args(char * const argv[])
+static void format_args(Array *argv)
 {
 	const char *sep;
-	const char *arg;
+	char *arg;
+	int status;
+	int i;
+
 	if (argv != NULL) {
 		sep = "";
-		while ((arg = *argv++) != NULL) {
+		for (i = 0; i < argv->length; i++) {
+			status = read_item_string(argv, i, &arg);
+			if (status < 0 || arg == NULL)
+				return;
+
 			OUTPUT("%s\"%s\"", sep, arg);
 			sep = ", ";
 		}
@@ -94,7 +90,7 @@ static void format_args(char * const argv[])
 /**
  * Format execve.
  */
-static void format_execve(const char *path, char * const argv[], char * const envp[], const char *cwd)
+static void format_execve(const char *path, Array *argv, Array *envp, const char *cwd)
 {
 	if (path != NULL) {
 		OUTPUT("\"%s\"", path);
@@ -114,16 +110,12 @@ static void format_execve(const char *path, char * const argv[], char * const en
 /**
  * Modify execve by injecting options last in arguments list.
  */
-static int modify_execve(struct tracee_info *tracee, const char *path, char * const argv[], char * const envp[], const char *cwd)
+static int modify_execve(Tracee *tracee, const char *path, Array *argv)
 {
-	int argv_size = 0;
 	int opts_size = 0;
-	int new_argv_size = 0;
-	char **new_argv = NULL;
 	int status = 0;
-	int size = 0;
-	int i, j = 0;
-	int driver_size = 0;
+	int i = 0;
+	int index;
 
 	if (opt_args != NULL) {
 		for (opts_size = 0; opt_args[opts_size] != NULL; opts_size++)
@@ -132,85 +124,69 @@ static int modify_execve(struct tracee_info *tracee, const char *path, char * co
 	}
 
 	if (opts_size <= 1) {
-		size = 0;
 		status = 0;
 		goto end;
 	}
 
-	if (driver_cmd && !tracee->forced_elf_interpreter)
-		driver_size = 1;
-	for (argv_size = 0; argv[argv_size] != NULL; argv_size++)
-		;
-	argv_size++;
-
-	new_argv_size = argv_size + opts_size + driver_size - 1;
-	new_argv = (char **)calloc(new_argv_size, sizeof(*new_argv));
-	if (new_argv == NULL) {
-		status = -ENOMEM;
-		goto end;
-	}
-
-	if (driver_size) {
+	if (driver_cmd && !tracee->forced_elf_interpreter) {
 		status = set_sysarg_path(tracee, driver_cmd, SYSARG_1);
 		if (status < 0) goto end;
-		new_argv[j++] = driver_cmd;
-	}
-	for (i = 0; i < argv_size - 1; i++) {
-		new_argv[j++] = argv[i];
-	}
-	for (i = 0; i < opts_size; i++) {
-		new_argv[j++] = opt_args[i];
+
+		/* Prepend the driver command.  */
+		status = resize_array(argv, 0, 1);
+		if (status < 0)
+			goto end;
+
+		status = write_item(argv, 0, driver_cmd);
+		if (status < 0)
+			goto end;
 	}
 
-	size = set_args(tracee, new_argv, SYSARG_2);
-	if (size < 0) {
-		status = size;
+	/* Write the new entries at the end of argv[],
+	 * rigth before the NULL terminator.  */
+	index = argv->length - 1;
+	status = resize_array(argv, index, opts_size - 1);
+	if (status < 0)
 		goto end;
-	}
-end:
-	if (new_argv != NULL)
-		free(new_argv);
 
+	for (i = 0; i < opts_size - 1; i++) {
+		status = write_item(argv, index + i, opt_args[i]);
+		if (status < 0)
+			goto end;
+	}
+	status = 0;
+
+end:
 	if (status < 0)
 		return status;
 
-	return size;
+	return 0;
 }
 
 
 /**
  * Process execve.
  */
-static int process_execve(struct tracee_info *tracee)
+static int process_execve(Tracee *tracee)
 {
 	char u_path[PATH_MAX];
-	char cwd_path[PATH_MAX];
-	char **argv = NULL;
-	char **envp = NULL;
+	Array *argv = NULL;
+	char *argv0;
 	int status = 0;
 	int size = 0;
 	int index;
-	int envp_changed = 0;
 
 	status = get_sysarg_path(tracee, u_path, SYSARG_1);
 	if (status < 0)
 		goto end;
-  
-	status = get_args(tracee, &argv, SYSARG_2);
+
+	status = fetch_array(tracee, &argv, SYSARG_2, 0);
 	if (status < 0)
 		goto  end;
 
-	status = get_args(tracee, &envp, SYSARG_3);
-	if (status < 0)
-		goto end;
-
-	status = get_pid_cwd(tracee->pid, cwd_path);
-	if (status < 0)
-		goto end;
-  
 	if (verbose) {
 		OUTPUT("VERB: execve: ");
-		format_execve(u_path, argv, NULL, cwd_path);
+		format_execve(u_path, argv, NULL, tracee->fs->cwd);
 	}
 	/* Check whether we are executing the compiler driver.
 	   Compares with argv0 (not the actual path, as some driver installation may be symlinks)
@@ -222,28 +198,54 @@ static int process_execve(struct tracee_info *tracee)
 		index = 0;
 	}
 
-	if (regexec(&driver_re, basename(argv[index]), 0, NULL, 0) == 0) {
-		if (get_env_entry(envp, "PROOT_ADDON_CC_OPTS_ACTIVE") == NULL) {
-			size = modify_execve(tracee, u_path, argv, envp, cwd_path);
+	status = read_item_string(argv, index, &argv0);
+	if (status < 0 || argv0 == NULL)
+		goto end;
+
+	if (regexec(&driver_re, basename(argv0), 0, NULL, 0) == 0) {
+		Array *envp = NULL;
+
+		status = fetch_array(tracee, &envp, SYSARG_3, 0);
+		if (status < 0)
+			goto end;
+
+		/* Environment variables should be compared with the "name"
+		 * part in the "name=value" string format.  */
+		envp->compare_item = (compare_item_t)compare_item_env;
+
+		index = find_item(envp, "PROOT_ADDON_CC_OPTS_ACTIVE");
+		if (index < 0) {
+			status = index;
+			goto end;
+		}
+
+		/* PROOT_ADDON_CC_OPTS_ACTIVE not found.  */
+		if (index == envp->length) {
+			size = modify_execve(tracee, u_path, argv);
 			if (size < 0) {
 				status = size;
 				goto end;
 			}
-			status = new_env_entry(&envp, "PROOT_ADDON_CC_OPTS_ACTIVE", "1");
+
+			/* Allocate a new entry at the end of envp[].  */
+			index = envp->length - 1;
+			resize_array(envp, envp->length - 1, 1);
+
+			status = write_item(envp, index, "PROOT_ADDON_CC_OPTS_ACTIVE=1");
 			if (status < 0)
 				goto end;
-			envp_changed = 1;
 		}
+
+		status = push_array(envp, SYSARG_3);
+		if (status < 0)
+			return status;
 	}
 
-	if (envp_changed) {
-		size = set_args(tracee, envp, SYSARG_3);
-		if (size < 0) {
-			status = size;
-			goto end;
-		}
-	}
+	status = push_array(argv, SYSARG_2);
+	if (status < 0)
+		return status;
 
+#if 0 // FIXME
 	if (verbose) {
 		OUTPUT("VERB: changed: ");
 		status = get_sysarg_path(tracee, u_path, SYSARG_1);
@@ -252,52 +254,51 @@ static int process_execve(struct tracee_info *tracee)
 		status = get_args(tracee, &argv, SYSARG_2);
 		if (status < 0)
 			goto  end;
-		format_execve(u_path, argv, NULL, cwd_path);
+		format_execve(u_path, argv, NULL, tracee->fs->cwd);
 	}
+#endif
+
  end:
 	if (status < 0)
 		return status;
-	return size;
+
+	return 0;
 }
 
 
 /**
  * Process syscall entries.
  */
-static int addon_enter(struct tracee_info *tracee)
+static int addon_enter(Tracee *tracee)
 {
 	if (!active) return 0;
 	int status = 0;
-	if (tracee->uregs == uregs) {
+
+	switch (get_abi(tracee)) {
+	case ABI_DEFAULT: {
 #include SYSNUM_HEADER
-		switch(tracee->sysnum) {
+		switch(peek_reg(tracee, CURRENT, SYSARG_NUM)) {
 		case PR_execve:
 			status = process_execve(tracee);
 		}
+		break;
 	}
 #ifdef SYSNUM_HEADER2
-	else if (tracee->uregs == uregs2) {
+	case ABI_2: {
 #include SYSNUM_HEADER2
-		switch(tracee->sysnum) {
+		switch(peek_reg(tracee, CURRENT, SYSARG_NUM)) {
 		case PR_execve:
 			status = process_execve(tracee);
 		}
+		break;
 	}
 #endif
+	default:
+		assert(0);
+	}
+
 	return status;
 }
-
-
-/**
- * Process syscall exits.
- */
-static int addon_exit(struct tracee_info *tracee)
-{
-	if (!active) return 0;
-  
-	return 0;
-}
-
 
 /**
  * Parse options string into an options array.
@@ -354,11 +355,18 @@ static void free_opts(char **opts)
 /**
  * Register the current addon through a constructor function.
  */
-static struct addon_info addon = { &addon_enter, &addon_exit };
+static int cc_opts_callback(Extension *extension, ExtensionEvent event,
+			intptr_t data1, intptr_t data2);
+
+static struct addon_info addon = { "cc_opts", cc_opts_callback };
 
 static void __attribute__((constructor)) init(void)
 {
 	syscall_addons_register(&addon);
+}
+
+static int cc_opts_init(void)
+{
 	active = getenv("PROOT_ADDON_CC_OPTS") != NULL;
 	verbose = getenv("PROOT_ADDON_CC_OPTS_VERBOSE") != NULL;
 	output = getenv("PROOT_ADDON_CC_OPTS_OUTPUT");
@@ -370,7 +378,7 @@ static void __attribute__((constructor)) init(void)
 	if (regcomp(&driver_re, driver_regexp, REG_NOSUB|REG_NEWLINE) != 0) {
 		fprintf(stderr, "error: cc_opts addon: error in driver path regexp: %s\n",
 			driver_regexp);
-		exit(1);
+		return -1;
 	}
 	opts = getenv("PROOT_ADDON_CC_OPTS_ARGS");
 	if (opts != NULL) {
@@ -393,15 +401,37 @@ static void __attribute__((constructor)) init(void)
 		output_file = fopen(output, mode);
 		if (output_file == NULL) {
 			perror("error: cc_opts addon output file");
-			exit(1);
+			return -1;
 		}
 		setlinebuf(output_file);
 	}
 	if (verbose) {
 		OUTPUT("cc_opts: output file: %s\n", output);
 		OUTPUT("cc_opts: driver regexp: %s\n", driver_regexp);
-		OUTPUT("cc_opts: options: "); format_args(opt_args); OUTPUT("\n");
+		// FIXME: OUTPUT("cc_opts: options: "); format_args(opt_args); OUTPUT("\n");
 	}
+
+	return 0;
+}
+
+
+static int cc_opts_callback(Extension *extension, ExtensionEvent event,
+			intptr_t data1, intptr_t data2)
+{
+	Tracee *tracee = TRACEE(extension);
+
+	switch (event) {
+	case INITIALIZATION:
+		return cc_opts_init();
+
+	case SYSCALL_ENTER_END:
+		return addon_enter(tracee);
+
+	default:
+		break;
+	}
+
+	return 0;
 }
 
 static void __attribute__((destructor)) fini(void)

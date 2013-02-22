@@ -46,6 +46,7 @@
 #include "path/binding.h"
 #include "tracee/tracee.h"
 #include "tracee/event.h"
+#include "addons/syscall_addons.h"
 #include "extension/extension.h"
 #include "build.h"
 
@@ -676,6 +677,13 @@ int main(int argc, char *argv[])
 	status = parse_config(tracee, argc, argv);
 	if (status < 0)
 		goto error;
+
+#ifdef ADDONS
+	/* Initialized all registered addons.  */
+	status = syscall_addons_init(tracee);
+	if (status < 0)
+		goto error;
+#endif
 
 	/* Start the first tracee.  */
 	status = launch_process(tracee);

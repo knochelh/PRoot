@@ -47,10 +47,6 @@
 
 #include "compat.h"
 
-#ifdef ENABLE_ADDONS
-#include "addons/syscall_addons.h"
-#endif
-
 /**
  * Launch the first process as specified by @tracee->cmdline[].  This
  * function returns -errno if an error occurred, otherwise 0.
@@ -443,13 +439,7 @@ int event_loop()
 			case SIGTRAP | PTRACE_EVENT_FORK  << 8:
 			case SIGTRAP | PTRACE_EVENT_CLONE << 8:
 			case SIGTRAP | PTRACE_EVENT_EXEC  << 8:
-				signal = 0;
-				break;
-
 			case SIGTRAP | PTRACE_EVENT_EXIT  << 8:
-#ifdef ENABLE_ADDONS
-				syscall_addons_procexit(get_tracee(pid, false));
-#endif
 				signal = 0;
 				break;
 

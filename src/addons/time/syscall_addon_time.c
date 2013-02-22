@@ -36,8 +36,12 @@
 #include <inttypes.h> /* SCNu32, PRNu32 */
 #include <limits.h> /* PATH_MAX */
 #include <time.h> /* CLOCKS_PER_SEC */
-#include "tracee/info.h"
+#include <signal.h> /* SIGTRAP, */
+#include <sys/ptrace.h> /* PTRACE_EVENT_EXIT, */
+
 #include "addons/syscall_addons.h"
+#include "tracee/tracee.h"
+#include "extension/extension.h"
 
 /**
  * Defines OUTPUT macro for all addon outputs.
@@ -104,7 +108,7 @@ parse_stat(const char stat_buffer[PATH_MAX], uint32_t *ut, uint32_t *st, uint32_
  * Outputs timing information for the exited process.
  */
 static int
-addon_procexit(struct tracee_info *tracee)
+addon_procexit(const Tracee *tracee)
 {
 	char buffer[PATH_MAX];
 	uint32_t ut, st, cut, cst;
@@ -127,11 +131,18 @@ addon_procexit(struct tracee_info *tracee)
 /**
  * Register the current addon through a constructor function.
  */
-static struct addon_info addon = { NULL, NULL, &addon_procexit };
+static int time_callback(Extension *extension, ExtensionEvent event,
+			intptr_t data1, intptr_t data2);
+
+static struct addon_info addon = { "time", time_callback };
 
 static void __attribute__((constructor)) init(void)
 {
 	syscall_addons_register(&addon);
+}
+
+static int time_init(void)
+{
 	active = getenv("PROOT_ADDON_TIME") != NULL;
 	verbose = getenv("PROOT_ADDON_TIME_VERBOSE") != NULL;
 	output = getenv("PROOT_ADDON_TIME_OUTPUT");
@@ -152,7 +163,7 @@ static void __attribute__((constructor)) init(void)
 		output_file = fopen(output, mode);
 		if (output_file == NULL) {
 			perror("error: time addon output file");
-			exit(1);
+			return -1;
 		}
 		setlinebuf(output_file);
 	}
@@ -160,9 +171,36 @@ static void __attribute__((constructor)) init(void)
 	if (verbose) {
 		OUTPUT("time: output file: %s\n", output);
 	}
+
+	return 0;
 }
 
 
-static void __attribute__((destructor)) fini(void)
+static int time_callback(Extension *extension, ExtensionEvent event,
+			intptr_t data1, intptr_t data2)
 {
+	const Tracee *tracee = TRACEE(extension);
+
+	switch (event) {
+	case INITIALIZATION:
+		return time_init();
+
+	case NEW_STATUS: {
+		int signal;
+		int tracee_status;
+
+		tracee_status = (int) data1;
+		signal = (tracee_status & 0xfff00) >> 8;
+
+		if (!WIFSTOPPED(tracee_status) || signal != (SIGTRAP | PTRACE_EVENT_EXIT  << 8))
+			break;
+
+		return addon_procexit(tracee);
+	}
+
+	default:
+		break;
+	}
+
+	return 0;
 }

@@ -47,10 +47,6 @@
 
 #include "compat.h"
 
-#ifdef ENABLE_ADDONS
-#include "addons/syscall_addons.h"
-#endif
-
 /**
  * Copy in @path a C string (PATH_MAX bytes max.) from the @tracee's
  * memory address space pointed to by the @reg argument of the
@@ -217,16 +213,6 @@ static int translate_syscall_enter(Tracee *tracee)
 	}
 	#include "syscall/sysnum-undefined.h"
 
-#ifdef ENABLE_ADDONS
-	/* Calls addons, unless status is negative with previous processing.  */
-	if (status >= 0) {
-		int addons_status = syscall_addons_enter(tracee);
-		if (addons_status < 0) {
-			status = addons_status;
-		}
-	}
-#endif
-
 	/* Remember the tracee status for the "exit" stage and avoid
 	 * the actual syscall if an error occured during the
 	 * translation. */
@@ -261,16 +247,6 @@ static int translate_syscall_exit(Tracee *tracee)
 		return status;
 	if (status > 0)
 		goto skip;
-
-#ifdef ENABLE_ADDONS
-	/* Calls addons, if the returned status is negative, proot processing is skipped.  */
-	status = syscall_addons_exit(tracee);
-	if (status < 0) {
-		poke_reg(tracee, SYSARG_RESULT, (word_t) status);
-		status = 0;
-		goto end;
-	}
-#endif
 
 	/* Set the tracee's errno if an error occured previously during
 	 * the translation. */

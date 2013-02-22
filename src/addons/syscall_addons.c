@@ -26,88 +26,31 @@
 #include <stdlib.h>
 #include "addons/syscall_addons.h"
 #include "tracee/tracee.h"
+#include "notice.h"
+#include "extension/extension.h"
 
 /**
  * Current list of active addons.
  */
 struct addon_info *addons_list;
 
+
 /**
- * Process the syscall before execution and after default proot processing
- * with optional addons.
- * Activated only if ENABLE_ADDONS is defined.
- * Return value is the status in case of addons error or bad arguments.
+ * Initialize all registered addons.
  */
-int syscall_addons_enter(Tracee *tracee)
+int syscall_addons_init(Tracee *tracee)
 {
 	int status = 0;
 	struct addon_info *current = addons_list;
-	for (current = addons_list; current != NULL && status >= 0; current = current->next)
-		if (current->enter != NULL)
-			status = (*current->enter)(tracee);
-	return status;
-}
-
-
-/**
- * Process the syscall after execution and before default proot processing
- * with optional addons.
- * Activated only if ENABLE_ADDONS is defined.
- * Return value is the status in case of addons error.
- */
-int syscall_addons_exit(Tracee *tracee)
-{
-	int process_current_exit(struct addon_info *current)
-	{
-		int status = 0;
-		if (current->next != NULL)
-			status = process_current_exit(current->next);
-		if (status >= 0)
-			if (current->exit != NULL)
-				status = (*current->exit)(tracee);
-		return status;
+	for (current = addons_list; current != NULL && status >= 0; current = current->next) {
+		status = initialize_extension(tracee, current->callback, NULL);
+		if (status < 0)
+			notice(tracee, WARNING, INTERNAL,
+				"can't initialize '%s' addon", current->name);
 	}
-	int status = 0;
-	struct addon_info *current = addons_list;
-	if (current != NULL)
-		status = process_current_exit(current);
 	return status;
 }
 
-
-/**
- * Calls all registered addons procexit() function at tracee exit.
- * Activated only if ENABLE_ADDONS is defined.
- * A return value < 0 indicates failure of one of the addon to the
- * caller.
- * Also, if a procexit() addon function returns a status < 0
- * other procexit addons are skipped.
- */
-int syscall_addons_procexit(Tracee *tracee)
-{
-	int status = 0;
-	struct addon_info *current = addons_list;
-	for (current = addons_list; current != NULL && status >= 0; current = current->next)
-		if (current->procexit != NULL)
-			status = (*current->procexit)(tracee);
-	return status;
-}
-
-
-/**
- * Process the syscall before execution of canonicalization.
- * Activated only if ENABLE_ADDONS is defined.
- * Return value is the status in case of addons error or bad arguments.
- */
-int syscall_addons_canon_host_enter(Tracee *tracee, char *real_path)
-{
-	int status = 0;
-	struct addon_info *current = addons_list;
-	for (current = addons_list; current != NULL && status >= 0; current = current->next)
-		if (current->canon_host_enter != NULL)
-		  status = (*current->canon_host_enter)(tracee, real_path);
-	return status;
-}
 
 /**
  * Register a new addon into the processing list.
@@ -123,19 +66,3 @@ void syscall_addons_register(struct addon_info *addon)
 		*ptr_last = addon;
 	}
 }
-
-/**
- * Unregister an addon from the processing list.
- */
-void syscall_addons_unregister(struct addon_info *addon)
-{
-	struct addon_info **ptr_last = &addons_list;
-	struct addon_info *current;
-	for (current = addons_list; current != NULL && current != addon; current = current->next)
-		ptr_last = &current->next;
-	if (current == addon) {
-		*ptr_last = addon->next;
-		addon->next = NULL;
-	}
-}
-
