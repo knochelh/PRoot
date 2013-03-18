@@ -20,19 +20,17 @@
  * 02110-1301 USA.
  */
 
-switch (peek_reg(tracee, CURRENT, SYSARG_NUM)) {
+syscall_number = peek_reg(tracee, ORIGINAL, SYSARG_NUM);
+switch (syscall_number) {
 case PR__llseek:
 case PR__newselect:
 case PR__sysctl:
-case PR_accept:
-case PR_accept4:
 case PR_add_key:
 case PR_adjtimex:
 case PR_afs_syscall:
 case PR_alarm:
 case PR_arch_prctl:
 case PR_bdflush:
-case PR_bind:
 case PR_break:
 case PR_brk:
 case PR_cacheflush:
@@ -45,7 +43,6 @@ case PR_clock_nanosleep:
 case PR_clock_settime:
 case PR_clone:
 case PR_close:
-case PR_connect:
 case PR_create_module:
 case PR_delete_module:
 case PR_dup:
@@ -105,7 +102,6 @@ case PR_getgid32:
 case PR_getgroups:
 case PR_getgroups32:
 case PR_getitimer:
-case PR_getpeername:
 case PR_getpgid:
 case PR_getpgrp:
 case PR_getpid:
@@ -119,7 +115,6 @@ case PR_getresuid32:
 case PR_getrlimit:
 case PR_getrusage:
 case PR_getsid:
-case PR_getsockname:
 case PR_getsockopt:
 case PR_gettid:
 case PR_gettimeofday:
@@ -298,7 +293,6 @@ case PR_sigprocmask:
 case PR_sigreturn:
 case PR_sigsuspend:
 case PR_socket:
-case PR_socketcall:
 case PR_socketpair:
 case PR_splice:
 case PR_ssetmask:
@@ -365,7 +359,7 @@ case PR_fchdir:
 case PR_chdir: {
 	char *tmp;
 
-	if (peek_reg(tracee, CURRENT, SYSARG_NUM) == PR_chdir) {
+	if (syscall_number == PR_chdir) {
 		status = get_sysarg_path(tracee, path, SYSARG_1);
 		if (status < 0)
 			break;
@@ -431,6 +425,106 @@ case PR_chdir: {
 	break;
 }
 
+case PR_bind:
+case PR_connect: {
+	word_t address;
+	word_t size;
+
+	address = peek_reg(tracee, CURRENT, SYSARG_2);
+	size    = peek_reg(tracee, CURRENT, SYSARG_3);
+
+	status = translate_socketcall_enter(tracee, &address, size);
+	if (status <= 0)
+		break;
+
+	poke_reg(tracee, SYSARG_2, address);
+	poke_reg(tracee, SYSARG_3, sizeof(struct sockaddr_un));
+
+	status = 0;
+	break;
+}
+
+case PR_accept:
+case PR_accept4:
+case PR_getsockname:
+case PR_getpeername:{
+	int size;
+
+	/* Remember: PEEK_MEM puts -errno in status and breaks if an
+	 * error occured.  */
+	size = (int) PEEK_MEM(peek_reg(tracee, ORIGINAL, SYSARG_3));
+
+	/* The "size" argument is both used as an input parameter
+	 * (max. size) and as an output parameter (actual size).  The
+	 * exit stage needs to know the max. size to not overwrite
+	 * anything, that's why it is copied in the 6th argument
+	 * (unused) before the kernel updates it.  */
+	poke_reg(tracee, SYSARG_6, size);
+
+	status = 0;
+	break;
+}
+
+case PR_socketcall: {
+	word_t args_addr;
+	word_t sock_addr;
+	word_t size_addr;
+	word_t size;
+
+	args_addr = peek_reg(tracee, CURRENT, SYSARG_2);
+
+	switch (peek_reg(tracee, CURRENT, SYSARG_1)) {
+	case SYS_BIND:
+	case SYS_CONNECT:
+		/* Handle these cases below.  */
+		status = 1;
+		break;
+
+	case SYS_ACCEPT:
+	case SYS_ACCEPT4:
+	case SYS_GETSOCKNAME:
+	case SYS_GETPEERNAME:
+		/* Remember: PEEK_MEM puts -errno in status and breaks
+		 * if an error occured.  */
+		size_addr =  PEEK_MEM(SYSARG_ADDR(3));
+		size = (int) PEEK_MEM(size_addr);
+
+		/* See case PR_accept for explanation.  */
+		poke_reg(tracee, SYSARG_6, size);
+		status = 0;
+		break;
+
+	default:
+		status = 0;
+		break;
+	}
+
+	/* An error occured or there's nothing else to do.  */
+	if (status <= 0)
+		break;
+
+	/* Remember: PEEK_MEM puts -errno in status and breaks if an
+	 * error occured.  */
+	sock_addr = PEEK_MEM(SYSARG_ADDR(2));
+	size      = PEEK_MEM(SYSARG_ADDR(3));
+
+	/* These parameters are used/restored at the exit stage.  */
+	poke_reg(tracee, SYSARG_5, sock_addr);
+	poke_reg(tracee, SYSARG_6, size);
+
+	status = translate_socketcall_enter(tracee, &sock_addr, size);
+	if (status <= 0)
+		break;
+
+	/* Remember: POKE_MEM puts -errno in status and breaks if an
+	 * error occured.  */
+	POKE_MEM(SYSARG_ADDR(2), sock_addr);
+	POKE_MEM(SYSARG_ADDR(3), sizeof(struct sockaddr_un));
+
+	status = 0;
+	break;
+}
+
 case PR_access:
 case PR_acct:
 case PR_chmod:
@@ -483,8 +577,8 @@ case PR_name_to_handle_at:
 	if (status < 0)
 		break;
 
-	flags = (   peek_reg(tracee, CURRENT, SYSARG_NUM) == PR_fchownat
-		 || peek_reg(tracee, CURRENT, SYSARG_NUM) == PR_name_to_handle_at)
+	flags = (   syscall_number == PR_fchownat
+		 || syscall_number == PR_name_to_handle_at)
 		? peek_reg(tracee, CURRENT, SYSARG_5)
 		: peek_reg(tracee, CURRENT, SYSARG_4);
 
@@ -646,8 +740,7 @@ case PR_symlinkat:
 	break;
 
 default:
-	notice(tracee, WARNING, INTERNAL, "unknown syscall %ld",
-		peek_reg(tracee, CURRENT, SYSARG_NUM));
+	notice(tracee, WARNING, INTERNAL, "unknown syscall %ld", syscall_number);
 	status = 0;
 	break;
 }

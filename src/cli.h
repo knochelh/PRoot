@@ -24,7 +24,7 @@ typedef struct {
 } Option;
 
 #ifndef VERSION
-#define VERSION "2.3.1"
+#define VERSION "2.4"
 #endif
 static const char *version = VERSION;
 static const char *subtitle = "chroot, mount --bind, and binfmt_misc without privilege/setup";
@@ -58,7 +58,6 @@ static char *recommended_bindings[] = {
 	"/etc/nsswitch.conf",
 	"/etc/resolv.conf",
 	"/etc/localtime",
-	"/run/",
 	"/dev/",
 	"/sys/",
 	"/proc/",
@@ -221,7 +220,6 @@ static Option options[] = {
 \t    * /etc/nsswitch.conf\n\
 \t    * /etc/resolv.conf\n\
 \t    * /etc/localtime\n\
-\t    * /run/\n\
 \t    * /dev/\n\
 \t    * /sys/\n\
 \t    * /proc/\n\

@@ -2,7 +2,7 @@
  *
  * This file was generated thanks to the following command:
  *
- *     cpp -dM linux/arch/x86/syscalls/../include/generated/asm/unistd_64.h | grep #define __NR_ | sed s/__NR_/PR_/g | sort -u
+ *     cpp -dM linux/arch/x86/syscalls/../include/generated/asm/unistd_64.h | grep '#define __NR_' | sed s/__NR_/PR_/g | sort -u
  */
 
 #include "syscall/sysnum-undefined.h"
@@ -121,6 +121,7 @@
 #define PR_iopl 172
 #define PR_ioprio_get 252
 #define PR_ioprio_set 251
+#define PR_kcmp 312
 #define PR_kexec_load 246
 #define PR_keyctl 250
 #define PR_kill 62
@@ -325,11 +326,6 @@
  * numbers from -1 to -10 are reserved for PRoot internal usage.
  */
 
-#define PR_ARM_breakpoint -11
-#define PR_ARM_cacheflush -12
-#define PR_ARM_set_tls -13
-#define PR_ARM_usr26 -14
-#define PR_ARM_usr32 -15
 #define PR__llseek -16
 #define PR__newselect -17
 #define PR_arm_fadvise64_64 -18

@@ -32,6 +32,8 @@ typedef unsigned long word_t;
 #        define ARCH_X86_64 1
 #    elif defined(__ARM_EABI__)
 #        define ARCH_ARM_EABI 1
+#    elif defined(__aarch64__)
+#        define ARCH_ARM64 1
 #    elif defined(__arm__)
 #        error "Only EABI is currently supported for ARM"
 #    elif defined(__i386__)
@@ -48,8 +50,11 @@ typedef unsigned long word_t;
 
     #define SYSNUM_HEADER  "syscall/sysnum-x86_64.h"
     #define SYSNUM_HEADER2 "syscall/sysnum-i386.h"
+    #define SYSNUM_HEADER3 "syscall/sysnum-x32.h"
     #define HOST_ELF_MACHINE {62, 3, 6, 0}
     #define RED_ZONE_SIZE 128
+    #define OFFSETOF_STAT_UID_32 24
+    #define OFFSETOF_STAT_GID_32 28
 
 #elif defined(ARCH_ARM_EABI)
 
@@ -57,12 +62,25 @@ typedef unsigned long word_t;
     #define SYSNUM_HEADER "syscall/sysnum-arm.h"
     #define HOST_ELF_MACHINE {40, 0};
     #define RED_ZONE_SIZE 0
+    #define OFFSETOF_STAT_UID_32 0
+    #define OFFSETOF_STAT_GID_32 0
+
+#elif defined(ARCH_ARM64)
+
+    #define user_regs_struct user_pt_regs
+    #define SYSNUM_HEADER  "syscall/sysnum-arm64.h"
+    #define HOST_ELF_MACHINE {183, 0};
+    #define RED_ZONE_SIZE 0
+    #define OFFSETOF_STAT_UID_32 0
+    #define OFFSETOF_STAT_GID_32 0
 
 #elif defined(ARCH_X86)
 
     #define SYSNUM_HEADER "syscall/sysnum-i386.h"
     #define HOST_ELF_MACHINE {3, 6, 0};
     #define RED_ZONE_SIZE 0
+    #define OFFSETOF_STAT_UID_32 0
+    #define OFFSETOF_STAT_GID_32 0
 
 #elif defined(ARCH_SH4)
 
@@ -70,7 +88,10 @@ typedef unsigned long word_t;
     #define SYSNUM_HEADER "syscall/sysnum-sh4.h"
     #define HOST_ELF_MACHINE {42, 0};
     #define RED_ZONE_SIZE 0
+    #define OFFSETOF_STAT_UID_32 0
+    #define OFFSETOF_STAT_GID_32 0
     #define NO_MISALIGNED_ACCESS 1
+
 #else
 
     #error "Unsupported architecture"

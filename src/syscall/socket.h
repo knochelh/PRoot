@@ -20,28 +20,13 @@
  * 02110-1301 USA.
  */
 
-#ifndef TRACEE_REG_H
-#define TRACEE_REG_H
+#ifndef SOCKET_H
+#define SOCKET_H
 
+#include "arch.h" /* word_t */
 #include "tracee/tracee.h"
-#include "arch.h"
 
-typedef enum {
-	SYSARG_NUM = 0,
-	SYSARG_1,
-	SYSARG_2,
-	SYSARG_3,
-	SYSARG_4,
-	SYSARG_5,
-	SYSARG_6,
-	SYSARG_RESULT,
-	STACK_POINTER,
-} Reg;
+int translate_socketcall_enter(Tracee *tracee, word_t *sock_addr, int size);
+int translate_socketcall_exit(Tracee *tracee, word_t sock_addr, word_t size_addr, word_t max_size);
 
-extern int fetch_regs(Tracee *tracee);
-extern int push_regs(Tracee *tracee);
-
-extern word_t peek_reg(const Tracee *tracee, RegVersion version, Reg reg);
-extern void poke_reg(Tracee *tracee, Reg reg, word_t value);
-
-#endif /* TRACEE_REG_H */
+#endif /* SOCKET_H */

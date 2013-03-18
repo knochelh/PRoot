@@ -24,6 +24,7 @@
 #define TRACEE_ABI_H
 
 #include <stdbool.h>
+#include <stddef.h> /* offsetof(),  */
 
 #include "tracee/tracee.h"
 #include "tracee/reg.h"
@@ -48,6 +49,8 @@ static inline Abi get_abi(const Tracee *tracee)
 	case 0x23:
 		return ABI_2;
 	case 0x33:
+		if (tracee->_regs[ORIGINAL].ds == 0x2B)
+			return ABI_3;
 	default:
 		return ABI_DEFAULT;
 	}
@@ -74,6 +77,30 @@ static inline size_t sizeof_word(const Tracee *tracee)
 	return (is_32on64_mode(tracee)
 		? sizeof(word_t) / 2
 		: sizeof(word_t));
+}
+
+#include <sys/stat.h>
+
+/**
+ * Return the offset of the 'uid' field in a 'stat' structure
+ * according to the ABI currently used by the given @tracee.
+ */
+static inline off_t offsetof_stat_uid(const Tracee *tracee)
+{
+	return (is_32on64_mode(tracee)
+		? OFFSETOF_STAT_UID_32
+		: offsetof(struct stat, st_uid));
+}
+
+/**
+ * Return the offset of the 'gid' field in a 'stat' structure
+ * according to the ABI currently used by the given @tracee.
+ */
+static inline off_t offsetof_stat_gid(const Tracee *tracee)
+{
+	return (is_32on64_mode(tracee)
+		? OFFSETOF_STAT_GID_32
+		: offsetof(struct stat, st_gid));
 }
 
 #endif /* TRACEE_ABI_H */

@@ -32,8 +32,11 @@
 #include <sys/utsname.h> /* struct utsname, */
 #include <stdarg.h>      /* va_*, */
 #include <talloc.h>      /* talloc_*, */
+#include <sys/un.h>      /* struct sockaddr_un, */
+#include <linux/net.h>   /* SYS_*, */
 
 #include "syscall/syscall.h"
+#include "syscall/socket.h"
 #include "arch.h"
 #include "tracee/mem.h"
 #include "tracee/tracee.h"
@@ -156,14 +159,27 @@ static int translate_sysarg(Tracee *tracee, Reg reg, Type type)
 	return translate_path2(tracee, AT_FDCWD, old_path, reg, type);
 }
 
+#define SYSARG_ADDR(n) (args_addr + ((n) - 1) * sizeof_word(tracee))
+
+#define PEEK_MEM(addr) peek_mem(tracee, addr);			\
+	if (errno != 0) {					\
+		status = -errno;				\
+		break;						\
+	}
+
+#define POKE_MEM(addr, value) poke_mem(tracee, addr, value);	\
+	if (errno != 0) {					\
+		status = -errno;				\
+		break;						\
+	}
+
 /**
  * Translate the input arguments of the current @tracee's syscall in the
  * @tracee->pid process area. This function sets @tracee->status to
  * -errno if an error occured from the tracee's point-of-view (EFAULT
- * for instance), otherwise 0. This function returns -errno if an
- * error occured from PRoot's point-of-view, otherwise 0.
+ * for instance), otherwise 0.
  */
-static int translate_syscall_enter(Tracee *tracee)
+static void translate_syscall_enter(Tracee *tracee)
 {
 	int flags;
 	int dirfd;
@@ -171,47 +187,50 @@ static int translate_syscall_enter(Tracee *tracee)
 	int newdirfd;
 
 	int status;
+	int status2;
 
 	char path[PATH_MAX];
 	char oldpath[PATH_MAX];
 	char newpath[PATH_MAX];
 
-	if (tracee->verbose >= 3)
-		VERBOSE(tracee, 3,
-			"pid %d: syscall(%ld, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx) [0x%lx]",
-			tracee->pid, peek_reg(tracee, CURRENT, SYSARG_NUM),
-			peek_reg(tracee, CURRENT, SYSARG_1), peek_reg(tracee, CURRENT, SYSARG_2),
-			peek_reg(tracee, CURRENT, SYSARG_3), peek_reg(tracee, CURRENT, SYSARG_4),
-			peek_reg(tracee, CURRENT, SYSARG_5), peek_reg(tracee, CURRENT, SYSARG_6),
-			peek_reg(tracee, CURRENT, STACK_POINTER));
-	else
-		VERBOSE(tracee, 2, "pid %d: syscall(%ld)", tracee->pid,
-			peek_reg(tracee, CURRENT, SYSARG_NUM));
+	word_t syscall_number;
 
 	status = notify_extensions(tracee, SYSCALL_ENTER_START, 0, 0);
 	if (status < 0)
-		return status;
+		goto end;
 	if (status > 0)
-		goto skip;
+		return;
 
 	/* Translate input arguments. */
 	switch (get_abi(tracee)) {
 	case ABI_DEFAULT: {
 		#include SYSNUM_HEADER
 		#include "syscall/enter.c"
-	}
 		break;
+	}
 #ifdef SYSNUM_HEADER2
 	case ABI_2: {
 		#include SYSNUM_HEADER2
 		#include "syscall/enter.c"
-	}
 		break;
+	}
+#endif
+#ifdef SYSNUM_HEADER3
+	case ABI_3: {
+		#include SYSNUM_HEADER3
+		#include "syscall/enter.c"
+		break;
+	}
 #endif
 	default:
 		assert(0);
 	}
 	#include "syscall/sysnum-undefined.h"
+
+end:
+	status2 = notify_extensions(tracee, SYSCALL_ENTER_END, 0, 0);
+	if (status2 < 0)
+		status = status2;
 
 	/* Remember the tracee status for the "exit" stage and avoid
 	 * the actual syscall if an error occured during the
@@ -223,12 +242,6 @@ static int translate_syscall_enter(Tracee *tracee)
 	else
 		tracee->status = 1;
 
-	status = notify_extensions(tracee, SYSCALL_ENTER_END, 0, 0);
-	if (status < 0)
-		return status;
-
-skip:
-	return 0;
 }
 
 /**
@@ -237,22 +250,24 @@ skip:
  * this syscall to @tracee->status if an error occured previously
  * during the translation, that is, if @tracee->status is less than 0.
  */
-static int translate_syscall_exit(Tracee *tracee)
+static void translate_syscall_exit(Tracee *tracee)
 {
-	bool restore_original_sp = true;
+	word_t syscall_number;
+	word_t syscall_result;
 	int status;
 
 	status = notify_extensions(tracee, SYSCALL_EXIT_START, 0, 0);
-	if (status < 0)
-		return status;
+	if (status < 0) {
+		poke_reg(tracee, SYSARG_RESULT, (word_t) status);
+		goto end;
+	}
 	if (status > 0)
-		goto skip;
+		return;
 
 	/* Set the tracee's errno if an error occured previously during
 	 * the translation. */
 	if (tracee->status < 0) {
 		poke_reg(tracee, SYSARG_RESULT, (word_t) tracee->status);
-		status = 0;
 		goto end;
 	}
 
@@ -270,6 +285,13 @@ static int translate_syscall_exit(Tracee *tracee)
 	}
 		break;
 #endif
+#ifdef SYSNUM_HEADER3
+	case ABI_3: {
+		#include SYSNUM_HEADER3
+		#include "syscall/exit.c"
+	}
+		break;
+#endif
 	default:
 		assert(0);
 	}
@@ -277,35 +299,22 @@ static int translate_syscall_exit(Tracee *tracee)
 
 	/* "status" was updated in syscall/exit.c.  */
 	poke_reg(tracee, SYSARG_RESULT, (word_t) status);
-	status = 0;
 
 end:
-	/* Propagate the error from exit.c.  */
+	status = notify_extensions(tracee, SYSCALL_EXIT_END, 0, 0);
 	if (status < 0)
-		goto skip;
-
-	/* "restore_original_sp" was updated in syscall/exit.c.  */
-	if (restore_original_sp)
-		poke_reg(tracee, STACK_POINTER, peek_reg(tracee, ORIGINAL, STACK_POINTER));
-
-	VERBOSE(tracee, 3, "pid %d:        -> 0x%lx [0x%lx]", tracee->pid,
-		peek_reg(tracee, CURRENT, SYSARG_RESULT),
-		peek_reg(tracee, CURRENT, STACK_POINTER));
+		poke_reg(tracee, SYSARG_RESULT, (word_t) status);
 
 	/* Reset the tracee's status. */
 	tracee->status = 0;
-
-	status = notify_extensions(tracee, SYSCALL_EXIT_END, 0, 0);
-skip:
-	/* The Tracee will be freed in event_loop() if status < 0. */
-	if (status > 0)
-		status = 0;
-	return status;
 }
+
+#undef SYSARG_ADDR
+#undef PEEK_MEM
+#undef POKE_MEM
 
 int translate_syscall(Tracee *tracee)
 {
-	int result;
 	int status;
 
 	status = fetch_regs(tracee);
@@ -313,7 +322,7 @@ int translate_syscall(Tracee *tracee)
 		return status;
 
 	/* Check if we are either entering or exiting a syscall. */
-	result = (tracee->status == 0
+	(tracee->status == 0
 		  ? translate_syscall_enter(tracee)
 		  : translate_syscall_exit(tracee));
 
@@ -321,5 +330,5 @@ int translate_syscall(Tracee *tracee)
 	if (status < 0)
 		return status;
 
-	return result;
+	return 0;
 }

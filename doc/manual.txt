@@ -6,8 +6,8 @@
 ``chroot``, ``mount --bind``, and ``binfmt_misc`` without privilege/setup
 -------------------------------------------------------------------------
 
-:Date: 2013-14-01
-:Version: 2.3.1
+:Date: 2013-18-03
+:Version: 2.4
 :Manual section: 1
 
 
@@ -179,7 +179,6 @@ The following options are aliases for handy sets of options.
     * /etc/nsswitch.conf
     * /etc/resolv.conf
     * /etc/localtime
-    * /run/
     * /dev/
     * /sys/
     * /proc/
@@ -412,10 +411,14 @@ required when PRoot is used as a ``mount --bind`` equivalent only.
 
 * CentOS, Debian, Fedora, Scientific, Suse, Ubuntu, ALT, Arch, CERN,
   Gentoo, OpenSuse, Openwall, Slackware, SLES, and etc. for x86 and
-  x86_64 CPUs, from the OpenVZ project and community:
+  x86_64 CPUs:
 
   * http://download.openvz.org/template/precreated/
-  * http://download.openvz.org/template/precreated/contrib/
+  * http://cdimage.ubuntu.com/ubuntu-core/releases/
+
+* Gentoo for a lot of architectures:
+
+  * http://distfiles.gentoo.org/releases/
 
 Technically such rootfs archive can be created by running the
 following command on the expected Linux distribution::

@@ -48,12 +48,15 @@ case PR_chroot: {
 	return 0;
 }
 
+case PR_chmod:
 case PR_chown:
+case PR_fchmod:
 case PR_fchown:
 case PR_lchown:
 case PR_chown32:
 case PR_fchown32:
 case PR_lchown32:
+case PR_fchmodat:
 case PR_fchownat: {
 	word_t result;
 
@@ -64,6 +67,57 @@ case PR_fchownat: {
 
 	/* Force success.  */
 	poke_reg(tracee, SYSARG_RESULT, 0);
+	return 0;
+}
+
+
+case PR_fstatat64:
+case PR_newfstatat:
+case PR_stat64:
+case PR_lstat64:
+case PR_fstat64:
+case PR_stat:
+case PR_lstat:
+case PR_fstat: {
+	word_t result;
+	word_t address;
+	word_t uid, gid;
+	Reg sysarg;
+
+	/* Override only if it succeed.  */
+	result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+	if (result != 0)
+		return 0;
+
+	/* Get the address of the 'stat' structure.  */
+	sysarg = peek_reg(tracee, ORIGINAL, SYSARG_NUM);
+	if (sysarg == PR_fstatat64 || sysarg == PR_newfstatat)
+		sysarg = SYSARG_3;
+	else
+		sysarg = SYSARG_2;
+
+	address = peek_reg(tracee, ORIGINAL, sysarg);
+
+	/* Get the uid & gid values from the 'stat' structure.  */
+	uid = peek_mem(tracee, address + offsetof_stat_uid(tracee));
+	if (errno != 0)
+		uid = 0; /* Not fatal.  */
+
+	gid = peek_mem(tracee, address + offsetof_stat_gid(tracee));
+	if (errno != 0)
+		gid = 0; /* Not fatal.  */
+
+	/* These values are 32-bit width, even on 64-bit architecture.  */
+	uid &= 0xFFFFFFFF;
+	gid &= 0xFFFFFFFF;
+
+	/* Override only if the file is owned by the current user.
+	 * Errors are not fatal here.  */
+	if (uid == getuid())
+		poke_mem(tracee, address + offsetof_stat_uid(tracee), 0);
+	if (gid == getgid())
+		poke_mem(tracee, address + offsetof_stat_gid(tracee), 0);
+
 	return 0;
 }
 
@@ -87,6 +141,10 @@ case PR_setfsgid32:
 	poke_reg(tracee, SYSARG_RESULT, 0);
 	return 0;
 
+case PR_setresuid:
+case PR_setresgid:
+case PR_setresuid32:
+case PR_setresgid32:
 case PR_getresuid:
 case PR_getresuid32:
 case PR_getresgid:

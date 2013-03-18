@@ -235,7 +235,7 @@ int which(Tracee *tracee, const char *paths, char host_path[PATH_MAX], char *con
 		strcat(path, "/");
 		strcat(path, command);
 
-		status = realpath2(tracee, host_path, path, false);
+		status = realpath2(tracee, host_path, path, true);
 		if (status == 0
 		    && stat(host_path, &statr) == 0
 		    && S_ISREG(statr.st_mode)
@@ -368,7 +368,7 @@ int translate_path(Tracee *tracee, char host_path[PATH_MAX],
 			return status;
 	}
 
-	VERBOSE(tracee, 4, "pid %d: translate(\"%s\" + \"%s\")", tracee->pid, host_path, guest_path);
+	VERBOSE(tracee, 2, "pid %d: translate(\"%s\" + \"%s\")", tracee->pid, host_path, guest_path);
 
 	status = notify_extensions(tracee, GUEST_PATH, (intptr_t)host_path, (intptr_t)guest_path);
 	if (status < 0)
@@ -389,7 +389,7 @@ int translate_path(Tracee *tracee, char host_path[PATH_MAX],
 		return status;
 
 skip:
-	VERBOSE(tracee, 4, "pid %d:          -> \"%s\"", tracee->pid, host_path);
+	VERBOSE(tracee, 2, "pid %d:          -> \"%s\"", tracee->pid, host_path);
 	return 0;
 }
 

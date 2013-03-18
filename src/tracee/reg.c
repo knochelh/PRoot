@@ -29,9 +29,17 @@
 #include <stdint.h>     /* *int*_t(), */
 #include <limits.h>     /* ULONG_MAX, */
 #include <string.h>     /* memcpy(3), */
+#include <sys/uio.h>    /* struct iovec, */
+
+#include "arch.h"
+
+#if defined(ARCH_ARM64)
+#include <linux/elf.h>  /* NT_PRSTATUS */
+#endif
 
 #include "tracee/reg.h"
 #include "tracee/abi.h"
+#include "notice.h"
 
 /**
  * Compute the offset of the register @reg_name in the USER area.
@@ -39,6 +47,9 @@
 #define USER_REGS_OFFSET(reg_name)			\
 	(offsetof(struct user, regs)			\
 	 + offsetof(struct user_regs_struct, reg_name))
+
+#define REG(tracee, version, index)			\
+	(*(word_t*) (((uint8_t *) &tracee->_regs[version]) + reg_offset[index]))
 
 /* Specify the ABI registers (syscall argument passing, stack pointer).
  * See sysdeps/unix/sysv/linux/${ARCH}/syscall.S from the GNU C Library. */
@@ -68,6 +79,7 @@
 	[STACK_POINTER] = USER_REGS_OFFSET(rsp),
     };
 
+    #undef  REG
     #define REG(tracee, version, index)					\
 	(*(word_t*) (tracee->_regs[ORIGINAL].cs == 0x23			\
 		? (((uint8_t *) &tracee->_regs[version]) + reg_offset_x86[index]) \
@@ -85,6 +97,23 @@
 	[SYSARG_6]      = USER_REGS_OFFSET(uregs[5]),
 	[SYSARG_RESULT] = USER_REGS_OFFSET(uregs[0]),
 	[STACK_POINTER] = USER_REGS_OFFSET(uregs[13]),
+    };
+
+#elif defined(ARCH_ARM64)
+
+    #undef  USER_REGS_OFFSET
+    #define USER_REGS_OFFSET(reg_name) offsetof(struct user_regs_struct, reg_name)
+
+    static off_t reg_offset[] = {
+	[SYSARG_NUM]    = USER_REGS_OFFSET(regs[8]),
+	[SYSARG_1]      = USER_REGS_OFFSET(regs[0]),
+	[SYSARG_2]      = USER_REGS_OFFSET(regs[1]),
+	[SYSARG_3]      = USER_REGS_OFFSET(regs[2]),
+	[SYSARG_4]      = USER_REGS_OFFSET(regs[3]),
+	[SYSARG_5]      = USER_REGS_OFFSET(regs[4]),
+	[SYSARG_6]      = USER_REGS_OFFSET(regs[5]),
+	[SYSARG_RESULT] = USER_REGS_OFFSET(regs[0]),
+	[STACK_POINTER] = USER_REGS_OFFSET(sp),
     };
 
 #elif defined(ARCH_X86)
@@ -121,11 +150,6 @@
 
 #endif
 
-#if !defined(REG)
-    #define REG(tracee, version, index)					\
-	(*(word_t*) (((uint8_t *) &tracee->_regs[version]) + reg_offset[index]))
-#endif
-
 /**
  * Return the *cached* value of the given @tracees' @reg.
  */
@@ -154,7 +178,23 @@ void poke_reg(Tracee *tracee, Reg reg, word_t value)
 		return;
 
 	REG(tracee, CURRENT, reg) = value;
-	tracee->_regs_have_changed = true;
+	tracee->_regs_were_changed = true;
+}
+
+/**
+ * Dump (notification) the value of the current @tracee's registers.
+ * @message is mixed to the output.
+ */
+static inline void dump_current_regs(Tracee *tracee, const char *message)
+{
+	notice(tracee, INFO, INTERNAL,
+		"pid %d: %s: %ld, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx) = 0x%lx [0x%lx]",
+		tracee->pid, message, peek_reg(tracee, CURRENT, SYSARG_NUM),
+		peek_reg(tracee, CURRENT, SYSARG_1), peek_reg(tracee, CURRENT, SYSARG_2),
+		peek_reg(tracee, CURRENT, SYSARG_3), peek_reg(tracee, CURRENT, SYSARG_4),
+		peek_reg(tracee, CURRENT, SYSARG_5), peek_reg(tracee, CURRENT, SYSARG_6),
+		peek_reg(tracee, CURRENT, SYSARG_RESULT),
+		peek_reg(tracee, CURRENT, STACK_POINTER));
 }
 
 /**
@@ -164,15 +204,33 @@ void poke_reg(Tracee *tracee, Reg reg, word_t value)
  */
 int fetch_regs(Tracee *tracee)
 {
+	const bool is_exit_stage = (tracee->status != 0);
 	int status;
 
+#if defined(ARCH_ARM64)
+	struct iovec regs;
+
+	regs.iov_base = &tracee->_regs[CURRENT];
+	regs.iov_len  = sizeof(tracee->_regs[CURRENT]);
+
+	status = ptrace(PTRACE_GETREGSET, tracee->pid, NT_PRSTATUS, &regs);
+#else
 	status = ptrace(PTRACE_GETREGS, tracee->pid, NULL, &tracee->_regs[CURRENT]);
+#endif
 	if (status < 0)
 		return status;
-	tracee->_regs_have_changed = false;
 
-	if (tracee->status == 0)
-		memcpy(&tracee->_regs[ORIGINAL], &tracee->_regs[CURRENT], sizeof(struct user_regs_struct));
+	tracee->keep_current_regs = false;
+
+	if (!is_exit_stage) {
+		if (tracee->verbose >= 3)
+			dump_current_regs(tracee, "sysenter start");
+
+		memcpy(&tracee->_regs[ORIGINAL], &tracee->_regs[CURRENT],
+			sizeof(tracee->_regs[CURRENT]));
+		tracee->_regs_were_changed = false;
+	} else if (tracee->verbose >= 5)
+		dump_current_regs(tracee, "sysexit start");
 
 	return 0;
 }
@@ -184,16 +242,60 @@ int fetch_regs(Tracee *tracee)
  */
 int push_regs(Tracee *tracee)
 {
+	const bool is_exit_stage = (tracee->status == 0);
 	int status;
 
-	if (tracee->_regs_have_changed) {
+	if (tracee->_regs_were_changed) {
+		/* At the very end of a syscall, with regard to the
+		 * entry, only the result register can be modified by
+		 * PRoot.  */
+		if (is_exit_stage && !tracee->keep_current_regs) {
+			/* Restore the sysarg register only if it is
+			 * not the same as the result register.  Note:
+			 * it's never the case on x86 architectures,
+			 * so don't make this check, otherwise it
+			 * would introduce useless complexity because
+			 * of the multiple ABI support.  */
+#if defined(ARCH_X86) || defined(ARCH_X86_64)
+#    define		RESTORE(sysarg)	(REG(tracee, CURRENT, sysarg) = REG(tracee, ORIGINAL, sysarg))
+#else
+#    define	 	RESTORE(sysarg) (void) (reg_offset[SYSARG_RESULT] != reg_offset[sysarg] && \
+				(REG(tracee, CURRENT, sysarg) = REG(tracee, ORIGINAL, sysarg)))
+#endif
+
+			RESTORE(SYSARG_NUM);
+			RESTORE(SYSARG_1);
+			RESTORE(SYSARG_2);
+			RESTORE(SYSARG_3);
+			RESTORE(SYSARG_4);
+			RESTORE(SYSARG_5);
+			RESTORE(SYSARG_6);
+			RESTORE(STACK_POINTER);
+		}
+
+#if defined(ARCH_ARM64)
+		struct iovec regs;
+
+		regs.iov_base = &tracee->_regs[CURRENT];
+		regs.iov_len  = sizeof(tracee->_regs[CURRENT]);
+
+		status = ptrace(PTRACE_SETREGSET, tracee->pid, NT_PRSTATUS, &regs);
+#else
 		status = ptrace(PTRACE_SETREGS, tracee->pid, NULL, &tracee->_regs[CURRENT]);
+#endif
 		if (status < 0)
 			return status;
 	}
 
-	if (tracee->status != 0)
-		memcpy(&tracee->_regs[MODIFIED], &tracee->_regs[CURRENT], sizeof(struct user_regs_struct));
+	if (!is_exit_stage) {
+		if (tracee->verbose >= 5)
+			dump_current_regs(tracee, "sysenter end");
+
+		memcpy(&tracee->_regs[MODIFIED], &tracee->_regs[CURRENT],
+			sizeof(tracee->_regs[CURRENT]));
+	}
+	else if (tracee->verbose >= 4)
+		dump_current_regs(tracee, "sysexit end");
 
 	return 0;
 }

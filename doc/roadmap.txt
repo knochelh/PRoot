@@ -7,6 +7,17 @@ Short term
 
 * Fix ``mkdir foo; cd foo; rmdir ../foo; readlink -e .``.
 
+* Document the compatibility with the old command-line interface
+  (without "-r")::
+
+       proot [options] <root> <command> [args...]
+
+* Make /proc/$PID/cmdline return tracee->cmdline.  Actually this could
+  be solved by the custom loader: execv(loader, tracee->cmdline, ...)
+
+* Use a custom loader in order to avoid bugs found in the GNU ELF
+  interpreter.
+
 * Make ``mount --bind`` change the tracee's configuration dynamically.
 
 * Make ``chroot`` change the tracee's configuration dynamically (not
@@ -16,13 +27,13 @@ Short term
 
       ./src/proot -B /usr/local/proot/centos-5-x86 make -C tests/
 
-* Use a custom loader in order to avoid bugs found in the GNU ELF
-  interpreter.
-
 * Provide static binaries for all supported platforms (take care of
   the kernel version requirement):
 
     https://groups.google.com/forum/?fromgroups=#!topic/proot_me/pbkgC-a66n4
+
+* Emulate getdents in order to glue the "fake" branches with their
+  parent directories without polluting the rootfs, c.f. build_glue().
 
 
 Middle term
@@ -111,8 +122,7 @@ Features
 
 * Allow a per-module verbose level
 
-* Emulate getdents in order to glue the "fake" branches with their
-  parent directories, c.f. create_missing_components().
+* Emulate chown, chmod, and mknod when -0 (fake_id0) is enabled.
 
 
 Documentation
