@@ -34,6 +34,8 @@
 #include "tracee/reg.h"
 #include "tracee/abi.h"
 #include "tracee/mem.h"
+
+#include "attribute.h"
 #include "compat.h"
 
 #define MAX_ARG_SHIFT 2
@@ -59,8 +61,7 @@ typedef struct {
  */
 static void modify_syscall(Tracee *tracee, const Config *config, const Modif *modif)
 {
-	int i;
-	int j;
+	size_t i, j;
 
 	assert(config != NULL);
 
@@ -116,7 +117,8 @@ static int parse_kernel_release(const char *release)
  * Handler for this @extension.  It is triggered each time an @event
  * occured.  See ExtensionEvent for the meaning of @data1 and @data2.
  */
-int kompat_callback(Extension *extension, ExtensionEvent event, intptr_t data1, intptr_t data2)
+int kompat_callback(Extension *extension, ExtensionEvent event,
+		intptr_t data1, intptr_t data2 UNUSED)
 {
 	int status;
 
@@ -152,7 +154,7 @@ int kompat_callback(Extension *extension, ExtensionEvent event, intptr_t data1, 
 
 		/* Nothing to do if this syscall is being discarded
 		 * (because of an error detected by PRoot).  */
-		if (tracee->status != 1)
+		if ((int) data1 < 0)
 			return 0;
 
 		switch (get_abi(tracee)) {
