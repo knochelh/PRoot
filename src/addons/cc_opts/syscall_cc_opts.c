@@ -48,26 +48,48 @@
 /**
  * Defines OUTPUT macro for all addon outputs.
  */
-#define OUTPUT(...) fprintf(output_file, __VA_ARGS__);
-#define VERBOSE(...) do { if (verbose) OUTPUT(__VA_ARGS__); } while (0)
+#define OUTPUT(...) fprintf(config->output_file, __VA_ARGS__);
+#define VERBOSE(...) do { if (config->verbose) OUTPUT(__VA_ARGS__); } while (0)
 
-/**
- * Local variables, self describing.
+/*
+ * Configuration local to extension.
  */
-static int active;
-static int verbose;
-static const char *driver_regexp;
-static const char *output;
-static FILE *output_file;
-static regex_t driver_re;
-static char **opt_args;
-static char *opts;
-static char *driver_cmd;
+typedef struct cc_opts_config {
+	struct cc_opts_config *parent;
+	int active;
+	int setup;
+	int verbose;
+	const char *driver_regexp;
+	const char *output;
+	FILE *output_file;
+	regex_t driver_re;
+	const char * const *opt_args;
+	const char *opts;
+	const char *driver_cmd;
+	const char *driver_opts;
+} cc_opts_config_t;
+
+
+/*
+ * Forward declarations.
+ */
+static int modify_execve(cc_opts_config_t *config, Tracee *tracee, const char *path, Array *argv);
+static int process_execve(Extension *extension, cc_opts_config_t *config, Tracee *tracee);
+static int cc_opts_setup(Extension *extension, cc_opts_config_t *config, Array *envp);
+static int cc_opts_enter(Extension *extension);
+static int cc_opts_init(Extension *extension);
+static int cc_opts_fini(Extension *extension);
+
+static char **parse_opts(Extension *extension, const char *opts);
+static int envp_getenv(Array *envp, const char *key, char **value);
+
+static int cc_opts_callback(Extension *extension, ExtensionEvent event,
+			    intptr_t data1, intptr_t data2);
 
 /** 
  * Format args.
  */
-static void format_args(Array *argv)
+static void format_args(cc_opts_config_t *config, Array *argv)
 {
 	const char *sep;
 	char *arg;
@@ -90,15 +112,15 @@ static void format_args(Array *argv)
 /**
  * Format execve.
  */
-static void format_execve(const char *path, Array *argv, Array *envp, const char *cwd)
+static void format_execve(cc_opts_config_t *config, const char *path, Array *argv, Array *envp, const char *cwd)
 {
 	if (path != NULL) {
 		OUTPUT("\"%s\"", path);
 	}
 	OUTPUT(": ");
-	format_args(argv);
+	format_args(config, argv);
 	OUTPUT(": ");
-	format_args(envp);
+	format_args(config, envp);
 	OUTPUT(": ");
 	if (cwd != NULL) {
 		OUTPUT("\"%s\"", cwd);
@@ -110,15 +132,15 @@ static void format_execve(const char *path, Array *argv, Array *envp, const char
 /**
  * Modify execve by injecting options last in arguments list.
  */
-static int modify_execve(Tracee *tracee, const char *path, Array *argv)
+static int modify_execve(cc_opts_config_t *config, Tracee *tracee, const char *path, Array *argv)
 {
 	int opts_size = 0;
 	int status = 0;
 	int i = 0;
 	int index;
 
-	if (opt_args != NULL) {
-		for (opts_size = 0; opt_args[opts_size] != NULL; opts_size++)
+	if (config->opt_args != NULL) {
+		for (opts_size = 0; config->opt_args[opts_size] != NULL; opts_size++)
 			;
 		opts_size++;
 	}
@@ -128,8 +150,8 @@ static int modify_execve(Tracee *tracee, const char *path, Array *argv)
 		goto end;
 	}
 
-	if (driver_cmd && !tracee->forced_elf_interpreter) {
-		status = set_sysarg_path(tracee, driver_cmd, SYSARG_1);
+	if (config->driver_cmd && !tracee->forced_elf_interpreter) {
+		status = set_sysarg_path(tracee, (char *)config->driver_cmd, SYSARG_1);
 		if (status < 0) goto end;
 
 		/* Prepend the driver command.  */
@@ -137,7 +159,7 @@ static int modify_execve(Tracee *tracee, const char *path, Array *argv)
 		if (status < 0)
 			goto end;
 
-		status = write_item(argv, 0, driver_cmd);
+		status = write_item(argv, 0, config->driver_cmd);
 		if (status < 0)
 			goto end;
 	}
@@ -150,7 +172,7 @@ static int modify_execve(Tracee *tracee, const char *path, Array *argv)
 		goto end;
 
 	for (i = 0; i < opts_size - 1; i++) {
-		status = write_item(argv, index + i, opt_args[i]);
+		status = write_item(argv, index + i, config->opt_args[i]);
 		if (status < 0)
 			goto end;
 	}
@@ -167,14 +189,16 @@ end:
 /**
  * Process execve.
  */
-static int process_execve(Tracee *tracee)
+static int process_execve(Extension *extension, cc_opts_config_t *config, Tracee *tracee)
 {
 	char u_path[PATH_MAX];
 	Array *argv = NULL;
+	Array *envp = NULL;
 	char *argv0;
 	int status = 0;
 	int size = 0;
 	int index;
+	int changed = 0;
 
 	status = get_sysarg_path(tracee, u_path, SYSARG_1);
 	if (status < 0)
@@ -184,9 +208,23 @@ static int process_execve(Tracee *tracee)
 	if (status < 0)
 		goto  end;
 
-	if (verbose) {
+	status = fetch_array(tracee, &envp, SYSARG_3, 0);
+	if (status < 0)
+		goto  end;
+	/* Environment variables should be compared with the "name"
+	 * part in the "name=value" string format.  */
+	envp->compare_item = (compare_item_t)compare_item_env;
+
+	status = cc_opts_setup(extension, config, envp);
+	if (status < 0)
+		goto end;
+
+	if (!config->active)
+		goto end;
+
+	if (config->verbose) {
 		OUTPUT("VERB: execve: ");
-		format_execve(u_path, argv, NULL, tracee->fs->cwd);
+		format_execve(config, u_path, argv, NULL, tracee->fs->cwd);
 	}
 	/* Check whether we are executing the compiler driver.
 	   Compares with argv0 (not the actual path, as some driver installation may be symlinks)
@@ -202,26 +240,16 @@ static int process_execve(Tracee *tracee)
 	if (status < 0 || argv0 == NULL)
 		goto end;
 
-	if (regexec(&driver_re, basename(argv0), 0, NULL, 0) == 0) {
-		Array *envp = NULL;
-
-		status = fetch_array(tracee, &envp, SYSARG_3, 0);
-		if (status < 0)
-			goto end;
-
-		/* Environment variables should be compared with the "name"
-		 * part in the "name=value" string format.  */
-		envp->compare_item = (compare_item_t)compare_item_env;
-
+	if (regexec(&config->driver_re, basename(argv0), 0, NULL, 0) == 0) {
 		index = find_item(envp, "PROOT_ADDON_CC_OPTS_ACTIVE");
 		if (index < 0) {
 			status = index;
 			goto end;
 		}
 
-		/* PROOT_ADDON_CC_OPTS_ACTIVE not found.  */
 		if (index == envp->length) {
-			size = modify_execve(tracee, u_path, argv);
+			/* PROOT_ADDON_CC_OPTS_ACTIVE not found.  */
+			size = modify_execve(config, tracee, u_path, argv);
 			if (size < 0) {
 				status = size;
 				goto end;
@@ -234,6 +262,7 @@ static int process_execve(Tracee *tracee)
 			status = write_item(envp, index, "PROOT_ADDON_CC_OPTS_ACTIVE=1");
 			if (status < 0)
 				goto end;
+			changed = 1;
 		}
 
 		status = push_array(envp, SYSARG_3);
@@ -245,18 +274,10 @@ static int process_execve(Tracee *tracee)
 	if (status < 0)
 		return status;
 
-#if 0 // FIXME
-	if (verbose) {
+	if (config->verbose && changed) {
 		OUTPUT("VERB: changed: ");
-		status = get_sysarg_path(tracee, u_path, SYSARG_1);
-		if (status < 0)
-			goto end;
-		status = get_args(tracee, &argv, SYSARG_2);
-		if (status < 0)
-			goto  end;
-		format_execve(u_path, argv, NULL, tracee->fs->cwd);
+		format_execve(config, u_path, argv, NULL, tracee->fs->cwd);
 	}
-#endif
 
  end:
 	if (status < 0)
@@ -269,17 +290,18 @@ static int process_execve(Tracee *tracee)
 /**
  * Process syscall entries.
  */
-static int addon_enter(Tracee *tracee)
+static int cc_opts_enter(Extension *extension)
 {
-	if (!active) return 0;
+	Tracee *tracee = TRACEE(extension);
+	cc_opts_config_t *config = extension->config;
 	int status = 0;
-
+	
 	switch (get_abi(tracee)) {
 	case ABI_DEFAULT: {
 #include SYSNUM_HEADER
 		switch(peek_reg(tracee, CURRENT, SYSARG_NUM)) {
 		case PR_execve:
-			status = process_execve(tracee);
+			status = process_execve(extension, config, tracee);
 		}
 		break;
 	}
@@ -288,7 +310,7 @@ static int addon_enter(Tracee *tracee)
 #include SYSNUM_HEADER2
 		switch(peek_reg(tracee, CURRENT, SYSARG_NUM)) {
 		case PR_execve:
-			status = process_execve(tracee);
+			status = process_execve(extension, config, tracee);
 		}
 		break;
 	}
@@ -302,11 +324,11 @@ static int addon_enter(Tracee *tracee)
 
 /**
  * Parse options string into an options array.
- * The generated array must be freed with free_opts().
+ * The generated array is talloc-ed into extension.
  */
-static char **parse_opts(const char *opts)
+static char **parse_opts(Extension *extension, const char *opts)
 {
-	char *args = strdup(opts);
+	char *args = talloc_strdup(extension->config, opts);
 	char **opt_args = NULL;
 	char *arg;
 	int opt_num = 0;
@@ -317,12 +339,11 @@ static char **parse_opts(const char *opts)
 		arg = strtok(NULL, " ");
 	}
 	/* The opt_args pointer will point to the args, but the
-	   element opt_args[-1] contains the dupped
-	   string to be freed in free_opts.
+	   element opt_args[-1] contains the dupped string.
 	   Thus we allocate the space for opt_num args plus the
 	   dupped string element, plus the terminating NULL element.
 	*/
-	opt_args = (char **)calloc(opt_num+2, sizeof(*opt_args));
+	opt_args = talloc_zero_array(extension->config, char *, opt_num + 2);
 	if (opt_args == NULL)
 		return NULL;
 	opt_args[0] = args;
@@ -342,90 +363,173 @@ static char **parse_opts(const char *opts)
 	return opt_args;
 }
 
-/**
- * Free an option array allocated by parse_opts().
- */
-static void free_opts(char **opts)
+
+static int envp_getenv(Array *envp, const char *key, char **value)
 {
-	opts--;
-	free(opts[0]);
-	free(opts);
+	int index, status;
+	char *str_value;
+
+	index = find_item(envp, key);
+	if (index < 0)
+		return index;
+	if (index == envp->length) {
+		*value = NULL;
+		return 0;
+	}
+	status = read_item_string(envp, index, &str_value);
+	if (status < 0)
+		return status;
+	*value = &str_value[strlen(key) + 1];
+	return 0;
 }
 
-/**
- * Register the current addon through a constructor function.
- */
-static int cc_opts_callback(Extension *extension, ExtensionEvent event,
-			intptr_t data1, intptr_t data2);
-
-static struct addon_info addon = { "cc_opts", cc_opts_callback };
-
-static void __attribute__((constructor)) init(void)
+static int cc_opts_setup(Extension *extension, cc_opts_config_t *config, Array *envp)
 {
-	syscall_addons_register(&addon);
-}
+	char *env_value;
+	int status;
 
-static int cc_opts_init(void)
-{
-	active = getenv("PROOT_ADDON_CC_OPTS") != NULL;
-	verbose = getenv("PROOT_ADDON_CC_OPTS_VERBOSE") != NULL;
-	output = getenv("PROOT_ADDON_CC_OPTS_OUTPUT");
-	if (output == NULL || *output == '\0')
-		output = ":stderr";
-	driver_regexp = getenv("PROOT_ADDON_CC_OPTS_CCRE");
-	if (driver_regexp == NULL)
-		driver_regexp = "^\\(gcc\\|g++\\|cc\\|c++\\)$";
-	if (regcomp(&driver_re, driver_regexp, REG_NOSUB|REG_NEWLINE) != 0) {
+	assert(config != NULL);
+	assert(envp != NULL);
+
+	if (config->setup)
+		return 0;
+	config->setup = 1;
+
+	status = envp_getenv(envp, "PROOT_ADDON_CC_OPTS", &env_value);
+	if (status < 0) return status;
+
+	config->active = (env_value != NULL);
+
+	if (!config->active)
+		return 0;
+
+	status = envp_getenv(envp, "PROOT_ADDON_CC_OPTS_ACTIVE", &env_value);
+	if (status < 0) return status;
+	if (env_value != NULL) {
+		config->active = 0;
+		return 0;
+	}
+
+	status = envp_getenv(envp, "PROOT_ADDON_CC_OPTS_VERBOSE", &env_value);
+	if (status < 0) return status;
+	config->verbose = env_value != NULL;
+
+	status = envp_getenv(envp, "PROOT_ADDON_CC_OPTS_OUTPUT", &env_value);
+	if (status < 0) return status;
+	config->output = env_value;
+	if (config->output == NULL || *config->output == '\0')
+		config->output = ":stderr";
+
+	status = envp_getenv(envp, "PROOT_ADDON_CC_OPTS_CCRE", &env_value);
+	if (status < 0) return status;
+	config->driver_regexp = env_value;
+	if (config->driver_regexp == NULL)
+		config->driver_regexp = "^\\(gcc\\|g++\\|cc\\|c++\\)$";
+	if (regcomp(&config->driver_re, config->driver_regexp, REG_NOSUB|REG_NEWLINE) != 0) {
 		fprintf(stderr, "error: cc_opts addon: error in driver path regexp: %s\n",
-			driver_regexp);
+			config->driver_regexp);
 		return -1;
 	}
-	opts = getenv("PROOT_ADDON_CC_OPTS_ARGS");
-	if (opts != NULL) {
-		opt_args = parse_opts(opts);
+
+	status = envp_getenv(envp, "PROOT_ADDON_CC_OPTS_ARGS", &env_value);
+	if (status < 0) return status;
+	config->opts = env_value;
+	if (config->opts != NULL) {
+		config->opt_args = (const char * const *)parse_opts(extension, config->opts);
 	}
-	driver_cmd = getenv("PROOT_ADDON_CC_OPTS_DRIVER");
-	if (driver_cmd) driver_cmd = realpath(driver_cmd, NULL);
+
+	status = envp_getenv(envp, "PROOT_ADDON_CC_OPTS_DRIVER", &env_value);
+	if (status < 0) return status;
+	config->driver_cmd = env_value;
+	if (config->driver_cmd) config->driver_cmd = realpath(config->driver_cmd, NULL);
 
 	/* Open output file.  */
-	if (strcmp(output, ":stdout") == 0)
-		output_file = stdout;
-	else if (strcmp(output, ":stderr") == 0)
-		output_file = stderr;
+	if (strcmp(config->output, ":stdout") == 0)
+		config->output_file = stdout;
+	else if (strcmp(config->output, ":stderr") == 0)
+		config->output_file = stderr;
 	else {
 		const char *mode = "w";
+		const char *output = config->output;
 		if (*output == '+') {
 			mode = "a";
 			output++;
 		}
-		output_file = fopen(output, mode);
-		if (output_file == NULL) {
+		config->output_file = fopen(output, mode);
+		if (config->output_file == NULL) {
 			perror("error: cc_opts addon output file");
 			return -1;
 		}
-		setlinebuf(output_file);
+		setlinebuf(config->output_file);
 	}
-	if (verbose) {
-		OUTPUT("cc_opts: output file: %s\n", output);
-		OUTPUT("cc_opts: driver regexp: %s\n", driver_regexp);
-		// FIXME: OUTPUT("cc_opts: options: "); format_args(opt_args); OUTPUT("\n");
+	if (config->verbose &&
+	    (config->parent == NULL || config->parent->active == 0)) {
+		OUTPUT("cc_opts: output file: %s\n", config->output);
+		OUTPUT("cc_opts: driver regexp: %s\n", config->driver_regexp);
+		OUTPUT("cc_opts: options: %s\n", config->opts?:"<none>");
 	}
 
 	return 0;
 }
 
 
+static int cc_opts_init(Extension *extension)
+{
+	assert(extension->config == NULL);
+	extension->config = talloc_zero(extension, cc_opts_config_t);
+	if (extension->config == NULL)
+		return -1;
+	return 0;
+
+}
+
+static int cc_opts_fini(Extension *extension)
+{
+	cc_opts_config_t *config;
+
+	assert(extension->config != NULL);
+	config = extension->config;
+	regfree(&config->driver_re);
+	talloc_free(extension->config);
+	extension->config = NULL;
+	return 0;
+}
+
+static int cc_opts_inherit(Extension *extension, Extension *parent_extension)
+{
+	int status;
+	cc_opts_config_t *config, *parent_config;
+
+	assert(parent_extension->config != NULL);
+	status = cc_opts_init(extension);
+	if (status < 0) return status;
+	config = extension->config;
+	parent_config = parent_extension->config;
+	config->parent = parent_config;
+	return 0;
+}
+
 static int cc_opts_callback(Extension *extension, ExtensionEvent event,
 			intptr_t data1, intptr_t data2)
 {
-	Tracee *tracee = TRACEE(extension);
 
 	switch (event) {
 	case INITIALIZATION:
-		return cc_opts_init();
+		return cc_opts_init(extension);
+
+	case INHERIT_PARENT:
+		return 1; /* Handle inheritance specifically. */
+
+	case INHERIT_CHILD: {
+		Extension *parent_extension = (Extension *)data1;
+		return cc_opts_inherit(extension, parent_extension);
+	}
 
 	case SYSCALL_ENTER_END:
-		return addon_enter(tracee);
+		return cc_opts_enter(extension);
+
+	case REMOVED:
+		return cc_opts_fini(extension);
 
 	default:
 		break;
@@ -434,9 +538,13 @@ static int cc_opts_callback(Extension *extension, ExtensionEvent event,
 	return 0;
 }
 
-static void __attribute__((destructor)) fini(void)
+
+/**
+ * Register the current addon through a constructor function.
+ */
+static void __attribute__((constructor)) init(void)
 {
-	regfree(&driver_re);
-	if (opt_args != NULL)
-		free_opts(opt_args);
+	static struct addon_info addon = { "cc_opts", cc_opts_callback };
+
+	syscall_addons_register(&addon);
 }

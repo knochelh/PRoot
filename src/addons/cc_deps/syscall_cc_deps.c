@@ -45,6 +45,8 @@
 #include "addons/syscall_addons.h"
 #include "extension/extension.h"
 
+#warning "cc_deps ADDON is deprecated. Pleasde remove from build."
+
 /**
  * Defines OUTPUT macro for all addon outputs.
  */
