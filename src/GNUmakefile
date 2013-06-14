@@ -109,7 +109,7 @@ endif
 ######################################################################
 # Auto-configuration
 
-CHECK_VERSION = VERSION=$$($(GIT) describe --tags --dirty --abbrev=8 --always 2>/dev/null); \
+CHECK_VERSION = VERSION=$$(cd $(MAKEDIR) && $(GIT) describe --tags --dirty --abbrev=8 --always 2>/dev/null); \
 		if [ ! -z "$${VERSION}" ]; \
 		then /bin/echo -e "\#undef VERSION\n\#define VERSION \"$${VERSION}\""; \
 		fi;
