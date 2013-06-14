@@ -24,16 +24,16 @@ typedef struct {
 } Option;
 
 #ifndef VERSION
-#define VERSION "2.4.1"
+#define VERSION "3.0.1"
 #endif
 static const char *version = VERSION;
 static const char *subtitle = "chroot, mount --bind, and binfmt_misc without privilege/setup";
 static const char *synopsis = "proot [option] ... [command]";
 static const char *colophon =
 #ifdef LICENSE_MIT
-  "Copyright (C) 2012 STMicroelectronics, licensed under The MIT License.\n"
+  "Copyright (C) 2013 STMicroelectronics, licensed under The MIT License.\n"
 #else
-  "Copyright (C) 2012 STMicroelectronics, licensed under GPL v2 or later.\n"
+  "Copyright (C) 2013 STMicroelectronics, licensed under GPL v2 or later.\n"
 #endif
 #ifdef DAYS_LIMIT
 #define STRINGIFY_(x) #x
@@ -105,7 +105,13 @@ static Option options[] = {
 \taccessible in the confined environment just as if it were part of\n\
 \tthe guest rootfs.  By default the host path is bound to the same\n\
 \tpath in the guest rootfs but users can specify any other location\n\
-\twith the syntax: -b *host_path*:*guest_location*.",
+\twith the syntax: -b *host_path*:*guest_location*.  If the\n\
+\tguest location is a symbolic link, it is dereferenced to ensure\n\
+\tthe new content is accessible through all the symbolic links that\n\
+\tpoint to the overlaid content.  In most cases this default\n\
+\tbehavior shouldn't be a problem, although it is possible to\n\
+\texplicitly not dereference the guest location by appending it the\n\
+\t! character: -b *host_path*:*guest_location!*.",
 	},
 	{ .class = "Regular options",
 	  .arguments = {

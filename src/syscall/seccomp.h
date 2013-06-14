@@ -20,10 +20,27 @@
  * 02110-1301 USA.
  */
 
-#ifndef ATTRIBUTE_H
-#define ATTRIBUTE_H
+#ifndef SECCOMP_H
+#define SECCOMP_H
 
-#define UNUSED __attribute__((unused))
-#define FORMAT(a, b, c) __attribute__ ((format (a, b, c)))
+#include "tracee/tracee.h"
+#include "attribute.h"
+#include "arch.h"
 
-#endif /* ATTRIBUTE_H */
+typedef struct {
+	word_t value;
+	word_t flags;
+} FilteredSyscall;
+
+typedef struct {
+	int arch;
+	FilteredSyscall *syscalls;
+} Filter;
+
+#define FILTERED_SYSCALL_END { SYSCALL_AVOIDER, -1 }
+
+#define FILTER_SYSEXIT  0x1
+
+extern int enable_syscall_filtering(const Tracee *tracee);
+
+#endif /* SECCOMP_H */

@@ -236,7 +236,7 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, const char *host_path)
 
 	/* Sanity checks.  */
 	if (i < 1 || i >= argv->length) {
-		notice(tracee, WARNING, INTERNAL, "wrong number of arguments (%d)", i);
+		notice(tracee, WARNING, INTERNAL, "wrong number of arguments (%zd)", i);
 		return -ECANCELED;
 	}
 
@@ -362,7 +362,10 @@ int translate_execve(Tracee *tracee)
 	status = expand_interp(tracee, u_path, t_interp, u_interp, argv,
 			       extract_script_interp, false);
 	if (status < 0)
-		return status;
+		/* The Linux kernel actually returns -EACCES when
+		 * trying to execute a directory.  */
+		return status == -EISDIR ? -EACCES : status;
+
 	is_script = (status > 0);
 
 	/* It's the rigth place to check if the binary is PRoot itself.  */
@@ -457,8 +460,6 @@ int translate_execve(Tracee *tracee)
 	 * mixed-mode.  */
 	ignore_elf_interpreter = (compare_paths(get_root(tracee), "/") == PATHS_ARE_EQUAL
 				  || (tracee->qemu_pie_workaround && !inhibit_rpath));
-
-	tracee->forced_elf_interpreter = !ignore_elf_interpreter;
 
 	status = expand_interp(tracee, u_interp, t_interp, u_path /* dummy */,
 			       argv, extract_elf_interp, ignore_elf_interpreter);

@@ -20,12 +20,15 @@
  * 02110-1301 USA.
  */
 
+#include <sys/ptrace.h>    /* linux.git:c0a3a20b  */
+#include <linux/audit.h>   /* AUDIT_ARCH_*,  */
+
 #ifndef ARCH_H
 #define ARCH_H
 
 typedef unsigned long word_t;
 
-#define SYSCALL_AVOIDER -2
+#define SYSCALL_AVOIDER ((word_t) -2)
 
 #if !defined(ARCH_X86_64) && !defined(ARCH_ARM_EABI) && !defined(ARCH_X86) && !defined(ARCH_SH4)
 #    if defined(__x86_64__)
@@ -64,6 +67,8 @@ typedef unsigned long word_t;
     #define RED_ZONE_SIZE 0
     #define OFFSETOF_STAT_UID_32 0
     #define OFFSETOF_STAT_GID_32 0
+    #define EM_ARM 40
+    #define AUDIT_ARCH_NUM AUDIT_ARCH_ARM
 
 #elif defined(ARCH_ARM64)
 
@@ -81,6 +86,7 @@ typedef unsigned long word_t;
     #define RED_ZONE_SIZE 0
     #define OFFSETOF_STAT_UID_32 0
     #define OFFSETOF_STAT_GID_32 0
+    #define AUDIT_ARCH_NUM AUDIT_ARCH_I386
 
 #elif defined(ARCH_SH4)
 

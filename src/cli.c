@@ -187,8 +187,20 @@ static int handle_option_V(Tracee *tracee UNUSED, char *value UNUSED)
 {
 	printf("PRoot %s: %s.\n", version, subtitle);
 #ifdef ADDONS
-	printf("Addons: %s\n", ADDONS);
+	printf("built-in addons: %s\n", ADDONS);
 #endif
+	printf("built-in accelerators: process_vm = %s, seccomp_filter = %s\n",
+#if defined(HAVE_PROCESS_VM)
+		"yes",
+#else
+		"no",
+#endif
+#if defined(HAVE_SECCOMP_FILTER)
+		"yes"
+#else
+		"no"
+#endif
+		);
 	printf("%s\n", colophon);
 	exit_failure = false;
 	return -1;
@@ -239,7 +251,7 @@ static void print_usage(Tracee *tracee, bool detailed)
 
 	DETAIL(printf("PRoot %s: %s.\n", version, subtitle));
 #ifdef ADDONS
-	DETAIL(printf("Addons: %s\n", ADDONS));
+	DETAIL(printf("built-in addons: %s\n", ADDONS));
 #endif
 	DETAIL(printf("\n"));
 	printf("Usage:\n  %s\n", synopsis);

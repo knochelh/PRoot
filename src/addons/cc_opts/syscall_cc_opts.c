@@ -150,7 +150,7 @@ static int modify_execve(cc_opts_config_t *config, Tracee *tracee, const char *p
 		goto end;
 	}
 
-	if (config->driver_cmd && !tracee->forced_elf_interpreter) {
+	if (config->driver_cmd /* && !tracee->forced_elf_interpreter */) {
 		status = set_sysarg_path(tracee, (char *)config->driver_cmd, SYSARG_1);
 		if (status < 0) goto end;
 
@@ -230,7 +230,7 @@ static int process_execve(Extension *extension, cc_opts_config_t *config, Tracee
 	   Compares with argv0 (not the actual path, as some driver installation may be symlinks)
 	   and check if basename argv0 matches driver_re.
 	*/
-	if (tracee->forced_elf_interpreter) {
+	if (0/*tracee->forced_elf_interpreter*/) {
 		index = 1;
 	} else {
 		index = 0;
