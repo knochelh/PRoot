@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <linux/limits.h>
 
+#include "cec_lib.h"
 #include "addons/syscall_addons.h"
 #include "extension/extension.h"
 
@@ -29,6 +30,9 @@ static int active;
 static int verbose;
 static FILE *output_file = NULL;
 static char *reloc_dir = NULL;
+
+static cec_hash_t *ignored_pathes = NULL;
+static cec_hash_t *translated_pathes = NULL;
 
 static char *predef_ignored_prefixes[] =
   {
@@ -54,6 +58,15 @@ static void __attribute__((constructor)) init(void)
   };
 
   syscall_addons_register(&addon);
+}
+
+
+static void __attribute__((destructor)) fini(void)
+{
+  if (ignored_pathes != NULL)
+    cec_hash_del(ignored_pathes);
+  if (translated_pathes != NULL)
+    cec_hash_del(translated_pathes);
 }
 
 
@@ -144,6 +157,15 @@ static int reloc_exec_init(Extension *extension)
 	    }
 	  userdef_ignored_prefixes[index] = NULL;
 	}
+
+      ignored_pathes = cec_hash_new
+	(cec_hash_string, cec_compare_strings, cec_free_element);
+      assert(ignored_pathes != NULL);
+
+      translated_pathes = cec_hash_new
+	(cec_hash_string, cec_compare_strings, cec_free_element);
+      assert(translated_pathes != NULL);
+
       return reloc_exec_mkdir(reloc_dir);
     }
   return 0;
@@ -170,10 +192,17 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
 
   VERBOSE("translated: %s\n", translated);
 
+  if (cec_hash_has_element(ignored_pathes, translated))
+    {
+      VERBOSE(" a-ignored: %s\n", translated);
+      return 0;
+    }
+
   /* skip already relocated path */
   if (strncmp(translated, reloc_dir, reloc_dir_len) == 0)
     {
       VERBOSE("   ignored: %s\n", translated);
+      cec_hash_add_element(ignored_pathes, strdup(translated));
       return 0;
     }
 
@@ -181,6 +210,7 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
   if (in_predef_prefix_list(translated))
     {
       VERBOSE("   ignored: %s\n", translated);
+      cec_hash_add_element(ignored_pathes, strdup(translated));
       return 0;
     }
 
@@ -188,6 +218,7 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
   if (in_userdef_prefix_list(translated))
     {
       VERBOSE("   ignored: %s\n", translated);
+      cec_hash_add_element(ignored_pathes, strdup(translated));
       return 0;
     }
 
@@ -197,6 +228,7 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
     {
       /* skip when not a file or a directory */
       VERBOSE("   ignored: %s\n", translated);
+      cec_hash_add_element(ignored_pathes, strdup(translated));
       return 0;
     }
 
@@ -207,6 +239,13 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
   memcpy(translated, reloc_dir, reloc_dir_len);
   translated = translated + reloc_dir_len;
   VERBOSE(" relocated: %s\n", relocated);
+
+  if (cec_hash_has_element(translated_pathes, relocated))
+    {
+      VERBOSE(" a-relocat: %s\n", translated);
+      return 0;
+    }
+  cec_hash_add_element(translated_pathes, strdup(relocated));
 
   if (stat_status)
     {
