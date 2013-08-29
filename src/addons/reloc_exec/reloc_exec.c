@@ -36,7 +36,7 @@ static cec_hash_t *translated_pathes = NULL;
 
 static char *predef_ignored_prefixes[] =
   {
-    "/dev/", "/sys/", "/proc/", "/tmp/"
+    "/dev/", "/sys/", "/proc/"
   };
 
 static char **userdef_ignored_prefixes;
