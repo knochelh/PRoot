@@ -36,10 +36,11 @@ static cec_hash_t *translated_pathes = NULL;
 
 static char *predef_ignored_prefixes[] =
   {
-    "/dev", "/sys", "/proc"
+    "/dev", "/sys", "/proc", 0
   };
 
 static char **userdef_ignored_prefixes;
+static char **handled_prefixes;
 
 
 /*
@@ -98,30 +99,49 @@ static int reloc_exec_copyfile(char *src, char *dstdir)
 }
 
 
-static int in_predef_prefix_list(char *str)
+static int in_prefix_list(char **prefixes, char *str)
 {
   int i;
-  for (i = 0; i < (sizeof(predef_ignored_prefixes) / sizeof(char *)); i++)
+  if (prefixes == NULL)
+    return 0;
+  for (i = 0; prefixes[i]; i++)
     {
-      if (!strncmp(str, predef_ignored_prefixes[i],
-		   strlen(predef_ignored_prefixes[i])))
+      if (!strncmp(str, prefixes[i], strlen(prefixes[i])))
 	return 1;
     }
   return 0;
 }
 
-static int in_userdef_prefix_list(char *str)
+
+static char **str_to_list(char *str)
 {
-  int i;
-  if (userdef_ignored_prefixes == NULL)
-    return 0;
-  for (i = 0; userdef_ignored_prefixes[i]; i++)
+  char *delim = ",";
+  int index = 0, nb_prefixes = 1;
+  char *saveptr, *tmp_str = str;
+  char **res_list;
+
+  if (str == NULL)
     {
-      if (!strncmp(str, userdef_ignored_prefixes[i],
-		   strlen(userdef_ignored_prefixes[i])))
-	return 1;
+      return NULL;
     }
-  return 0;
+
+  while ((tmp_str = strpbrk(tmp_str, delim)) != NULL)
+    {
+      nb_prefixes ++; tmp_str ++;
+    }
+
+  res_list =
+    (char **)malloc((nb_prefixes + 1) * sizeof(char *));
+
+  tmp_str = strtok_r(str, delim, &saveptr);
+  while (tmp_str != NULL)
+    {
+      res_list[index++] = tmp_str;
+      tmp_str = strtok_r(NULL, delim, &saveptr);
+    }
+  res_list[index] = NULL;
+
+  return res_list;
 }
 
 
@@ -135,28 +155,10 @@ static int reloc_exec_init(Extension *extension)
 
   if (active)
     {
-      char *userdef_ignored_prefixes_str =
-	getenv("PROOT_ADDON_RELOC_EXEC_IGNORED");
-      if (userdef_ignored_prefixes_str)
-	{
-	  char *delim = ",";
-	  int index = 0, nb_prefixes = 1;
-	  char *saveptr, *tmp_str = userdef_ignored_prefixes_str;
-	  while ((tmp_str = strpbrk(tmp_str, delim)) != NULL)
-	    {
-	      nb_prefixes ++; tmp_str ++;
-	    }
-	  userdef_ignored_prefixes =
-	    (char **)malloc((nb_prefixes + 1) * sizeof(char *));
-
-	  tmp_str = strtok_r(userdef_ignored_prefixes_str, delim, &saveptr);
-	  while (tmp_str != NULL)
-	    {
-	      userdef_ignored_prefixes[index++] = tmp_str;
-	      tmp_str = strtok_r(NULL, delim, &saveptr);
-	    }
-	  userdef_ignored_prefixes[index] = NULL;
-	}
+      userdef_ignored_prefixes =
+	str_to_list(getenv("PROOT_ADDON_RELOC_EXEC_IGNORED"));
+      handled_prefixes =
+	str_to_list(getenv("PROOT_ADDON_RELOC_EXEC_PREFIXES"));
 
       ignored_pathes = cec_hash_new
 	(cec_hash_string, cec_compare_strings, cec_free_element);
@@ -190,14 +192,6 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
   int stat_status;
   struct stat statbuf;
 
-  VERBOSE("translated: %s\n", translated);
-
-  if (cec_hash_has_element(ignored_pathes, translated))
-    {
-      VERBOSE(" a-ignored: %s\n", translated);
-      return 0;
-    }
-
   /* skip already relocated path */
   if (strncmp(translated, reloc_dir, reloc_dir_len) == 0)
     {
@@ -206,16 +200,23 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
       return 0;
     }
 
-  /* skip pathes starting by one of the predefined ignored prefixes */
-  if (in_predef_prefix_list(translated))
+  /* skip pathes starting by one of the ignored prefixes */
+  if (cec_hash_has_element(ignored_pathes, translated))
+    {
+      VERBOSE("   ignored: %s\n", translated);
+      return 0;
+    }
+
+  if(in_prefix_list(predef_ignored_prefixes, translated) ||
+     in_prefix_list(userdef_ignored_prefixes, translated))
     {
       VERBOSE("   ignored: %s\n", translated);
       cec_hash_add_element(ignored_pathes, strdup(translated));
       return 0;
     }
 
-  /* skip pathes starting by one of the userdefined ignored prefixes */
-  if (in_userdef_prefix_list(translated))
+  /* skip pathes not starting by one of the relocation prefixes */
+  if(handled_prefixes && !in_prefix_list(handled_prefixes, translated))
     {
       VERBOSE("   ignored: %s\n", translated);
       cec_hash_add_element(ignored_pathes, strdup(translated));
@@ -238,11 +239,12 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
   memmove(translated + reloc_dir_len, translated, translated_len + 1);
   memcpy(translated, reloc_dir, reloc_dir_len);
   translated = translated + reloc_dir_len;
+
+  VERBOSE("translated: %s\n", translated);
   VERBOSE(" relocated: %s\n", relocated);
 
   if (cec_hash_has_element(translated_pathes, relocated))
     {
-      VERBOSE(" a-relocat: %s\n", translated);
       return 0;
     }
   cec_hash_add_element(translated_pathes, strdup(relocated));
