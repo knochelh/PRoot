@@ -225,6 +225,9 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, const char *host_path)
 	dummy->reconf.tracee = tracee;
 	dummy->reconf.paths = NULL;
 
+	/* XXX inherit extensions before command initialization */
+	inherit_extensions(dummy, tracee, true);
+
 	status = parse_config(dummy, argv->length - 1, argv_pod);
 	if (status < 0)
 		return -ECANCELED;
@@ -270,8 +273,6 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, const char *host_path)
 		(void) swap_config(tracee, dummy);
 		return status;
 	}
-
-	inherit_extensions(tracee, dummy, true);
 
 	return 1;
 }
