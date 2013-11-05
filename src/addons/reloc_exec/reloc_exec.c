@@ -174,43 +174,36 @@ static int reloc_exec_init(Extension *extension)
 }
 
 
-static int reloc_exec_fini(Extension *extension)
-{
-  return 0;
-}
-
-
 static int reloc_exec_enter(Extension *extension, intptr_t data1)
 {
-  int status;
-
   if (!active) return 0;
 
-  char *translated = *(char**)data1, *relocated;
+  char *translated = *(char **)data1, *relocated;
   int reloc_dir_len = strlen(reloc_dir);
   int translated_len = strlen(translated);
-  int stat_status;
+  int status, stat_status;
   struct stat statbuf;
 
-  /* skip already relocated path */
+  VERBOSE("RELOC_EXEC_ENTER [%s]\n", translated);
+
+  /* handle already relocated path */
   if (strncmp(translated, reloc_dir, reloc_dir_len) == 0)
     {
-      VERBOSE("   ignored: %s\n", translated);
-      cec_hash_add_element(ignored_pathes, strdup(translated));
-      return 0;
+      char detranslated[PATH_MAX], *detranslated_ptr = detranslated;
+      strcpy(detranslated, translated + reloc_dir_len);
+      /* only copy/create relocated file/dir. do not relocate again */
+      return reloc_exec_enter(extension, (intptr_t)&detranslated_ptr);
     }
 
   /* skip pathes starting by one of the ignored prefixes */
   if (cec_hash_has_element(ignored_pathes, translated))
     {
-      VERBOSE("   ignored: %s\n", translated);
       return 0;
     }
 
   if(in_prefix_list(predef_ignored_prefixes, translated) ||
      in_prefix_list(userdef_ignored_prefixes, translated))
     {
-      VERBOSE("   ignored: %s\n", translated);
       cec_hash_add_element(ignored_pathes, strdup(translated));
       return 0;
     }
@@ -218,7 +211,6 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
   /* skip pathes not starting by one of the relocation prefixes */
   if(handled_prefixes && !in_prefix_list(handled_prefixes, translated))
     {
-      VERBOSE("   ignored: %s\n", translated);
       cec_hash_add_element(ignored_pathes, strdup(translated));
       return 0;
     }
@@ -228,7 +220,6 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
   if (!(stat_status || statbuf.st_mode & (S_IFDIR | S_IFREG)))
     {
       /* skip when not a file or a directory */
-      VERBOSE("   ignored: %s\n", translated);
       cec_hash_add_element(ignored_pathes, strdup(translated));
       return 0;
     }
@@ -277,11 +268,11 @@ static int reloc_exec_callback(Extension *extension, ExtensionEvent event,
     case INITIALIZATION:
       return reloc_exec_init(extension);
 
-    case REMOVED:
-      return reloc_exec_fini(extension);
-
     case TRANSLATED_PATH:
       return reloc_exec_enter(extension, data1);
+
+    case INHERIT_PARENT:
+      return 0;
 
     default:
       break;
