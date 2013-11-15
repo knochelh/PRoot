@@ -2,7 +2,8 @@
 #     make -f ${SOMEWHERE}/proot/src/GNUmakefile
 
 # the VPATH variable must point to the actual makefile directory
-VPATH	:= $(dir $(lastword $(MAKEFILE_LIST)))
+MAKEDIR := $(dir $(MAKEFILE_LIST))
+VPATH	:= $(MAKEDIR)
 GIT      = git
 RM       = rm
 INSTALL  = install
@@ -11,6 +12,39 @@ LD       = $(CC)
 CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I$(VPATH)
 CFLAGS   += -Wall -Wextra -O2
 LDFLAGS  += -ltalloc
+
+ifdef LIMITED_USE
+# For limited use and MIT license
+STATIC_BUILD=1
+LICENSE_MIT=1
+DAYS_LIMIT=30
+STRIP_INSTALL=1
+endif
+
+ifdef LICENSE_MIT
+I_CPPFLAGS  += -DLICENSE_MIT
+endif
+
+ifdef DAYS_LIMIT
+STATIC_BUILD=1
+TIME_NOW := $(shell date +%s)
+TIME_LIMIT:= $(shell date -d"$(DAYS_LIMIT) days" +%s)
+DATE_LIMIT:= $(shell date -d"$(DAYS_LIMIT) days" -u +"%Y-%m-%dUTC")
+I_CPPFLAGS   += -DDAYS_LIMIT=$(DAYS_LIMIT) -DDATE_LIMIT=$(DATE_LIMIT) -DTIME_NOW=$(TIME_NOW) -DTIME_LIMIT=$(TIME_LIMIT)
+endif
+
+ifdef STRIP_INSTALL
+INSTALL=install -s
+endif
+
+ifdef STATIC_BUILD
+I_LDFLAGS  += -static
+endif
+
+ifdef ENABLE_ADDONS
+# For care addon
+ENABLE_CEC_LIB=1
+endif
 
 OBJECTS = \
 	cli/cli.o		\
@@ -41,6 +75,19 @@ OBJECTS = \
 	extension/extension.o	\
 	extension/kompat/kompat.o \
 	extension/fake_id0/fake_id0.o
+
+ifdef ENABLE_CEC_LIB
+I_CPPFLAGS  += -I$(VPATH)/cec_lib
+OBJECTS += cec_lib/cec_hash.o
+endif
+
+
+# The ENABLE_ADDONS must be a space separated list of addons
+ifdef ENABLE_ADDONS
+OBJECTS += addons/syscall_addons.o
+I_CPPFLAGS += -DENABLE_ADDONS
+OBJECTS += $(subst $(MAKEDIR)/,,$(subst .c,.o,$(wildcard $(addsuffix /*.c, $(addprefix $(MAKEDIR)/addons/, $(ENABLE_ADDONS))))))
+endif
 
 ifdef CARE
 
@@ -96,9 +143,13 @@ endif
 ######################################################################
 # Auto-configuration
 
-CHECK_VERSION = VERSION=$$($(GIT) describe --tags --dirty --abbrev=8 --always 2>/dev/null); \
+CHECK_VERSION = VERSION=$$(cd $(MAKEDIR) && $(GIT) describe --tags --dirty --abbrev=8 --always 2>/dev/null); \
 		if [ ! -z "$${VERSION}" ]; \
 		then /bin/echo -e "\#undef VERSION\n\#define VERSION \"$${VERSION}\""; \
+		fi;
+
+CHECK_ADDONS = 	if [ ! -z "$(ENABLE_ADDONS)" ]; \
+		then /bin/echo -e "\#define ADDONS \"$(ENABLE_ADDONS)\""; \
 		fi;
 
 CHECK_FEATURES = readlinkat process_vm seccomp_filter
@@ -123,6 +174,7 @@ build.h: $(CHECK_RESULTS)
 	$(Q)echo "#ifndef BUILD_H"      >> $@
 	$(Q)echo "#define BUILD_H"      >> $@
 	$(Q)sh -c '$(CHECK_VERSION)'    >> $@
+	$(Q)sh -c '$(CHECK_ADDONS)'     >> $@
 	$(Q)cat $^                      >> $@
 	$(Q)echo "#endif /* BUILD_H */" >> $@
 
@@ -130,8 +182,8 @@ build.h: $(CHECK_RESULTS)
 # Build rules
 
 SRC     = $(dir $(firstword $(MAKEFILE_LIST)))
-COMPILE = $($(quiet)CC) $(CPPFLAGS) $(CFLAGS) -MD -c $(SRC)$(@:.o=.c) -o $@
-LINK    = $($(quiet)LD) -o $@ $^ $(LDFLAGS)
+COMPILE = $($(quiet)CC) $(CPPFLAGS) $(I_CPPFLAGS) $(CFLAGS) $(I_CFLAGS) -MD -c $(SRC)$(@:.o=.c) -o $@
+LINK    = $($(quiet)LD) -o $@ $^ $(LDFLAGS) $(I_LDFLAGS)
 
 proot care: $(OBJECTS)
 	$(LINK)

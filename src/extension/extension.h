@@ -50,6 +50,10 @@ typedef enum {
 	 * as-is.  */
 	HOST_PATH,
 
+	/* A guest path is fully translated. "(char **) data1" is the
+	 * address of the translated path, "data2" is NULL.  */
+	TRANSLATED_PATH,
+
 	/* The tracee enters a syscall, and PRoot hasn't do anything
 	 * yet.  If the extension returns > 0, then PRoot skips its
 	 * own handling.  If the extension returns < 0, then PRoot

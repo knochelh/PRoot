@@ -443,6 +443,10 @@ int translate_path(Tracee *tracee, char host_path[PATH_MAX],
 	if (status < 0)
 		return status;
 
+	status = notify_extensions(tracee, TRANSLATED_PATH, (intptr_t)&host_path, 0);
+	if (status < 0)
+		return status;
+
 skip:
 	VERBOSE(tracee, 2, "pid %d:          -> \"%s\"",
 		tracee != NULL ? tracee->pid : 0, host_path);

@@ -49,8 +49,22 @@ static Cli proot_cli = {
 	.name     = "proot",
 	.subtitle = "chroot, mount --bind, and binfmt_misc without privilege/setup",
 	.synopsis = "proot [option] ... [command]",
-	.colophon = "Visit http://proot.me for help, bug reports, suggestions, patchs, ...\n\
-Copyright (C) 2013 STMicroelectronics, licensed under GPL v2 or later.",
+	.colophon =
+#ifndef DAYS_LIMIT
+	"Visit http://proot.me for help, bug reports, suggestions, patchs, ...\n"
+#else
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
+	"This software is provided for a limited period of " STRINGIFY(DAYS_LIMIT) " days "
+	"(will expire on " STRINGIFY(DATE_LIMIT) ")\n"
+	"Visit http://proot.me for the official PRoot distribution.\n"
+#endif
+#ifdef LICENSE_MIT
+	"Copyright (C) 2013 STMicroelectronics, licensed under The MIT License.",
+#else
+	"Copyright (C) 2013 STMicroelectronics, licensed under GPL v2 or later.",
+#endif
+
 	.logo = "\
  _____ _____              ___\n\
 |  __ \\  __ \\_____  _____|   |_\n\

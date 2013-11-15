@@ -30,9 +30,13 @@
 #include <unistd.h>        /* getpid(2),  */
 #include <errno.h>         /* errno(3), */
 #include <stdlib.h>        /* strtol(3), */
+#ifdef DAYS_LIMIT
+#include <time.h>      /* time(2). */
+#endif
 
 #include "cli/cli.h"
 #include "cli/notice.h"
+#include "addons/syscall_addons.h"
 #include "extension/extension.h"
 #include "tracee/tracee.h"
 #include "tracee/event.h"
@@ -53,7 +57,12 @@ void print_usage(Tracee *tracee, const Cli *cli, bool detailed)
 
 #define DETAIL(a) if (detailed) a
 
-	DETAIL(printf("%s %s: %s.\n\n", cli->name, cli->version, cli->subtitle));
+	DETAIL(printf("%s %s: %s.\n", cli->name, cli->version, cli->subtitle));
+#ifdef ADDONS
+	DETAIL(printf("built-in addons: %s\n", ADDONS));
+#endif
+	DETAIL(printf("\n"));
+
 	printf("Usage:\n  %s\n", cli->synopsis);
 	DETAIL(printf("\n"));
 
@@ -103,6 +112,9 @@ void print_usage(Tracee *tracee, const Cli *cli, bool detailed)
 void print_version(const Cli *cli)
 {
 	printf("%s %s\n\n", cli->logo, cli->version);
+#ifdef ADDONS
+	printf("built-in addons: %s\n", ADDONS);
+#endif
 	printf("built-in accelerators: process_vm = %s, seccomp_filter = %s\n",
 #if defined(HAVE_PROCESS_VM)
 		"yes",
@@ -115,6 +127,7 @@ void print_version(const Cli *cli)
 		"no"
 #endif
 		);
+
 }
 
 static void print_execve_help(const Tracee *tracee, const char *argv0)
@@ -184,6 +197,18 @@ static void print_config(Tracee *tracee)
 
 	notify_extensions(tracee, PRINT_CONFIG, 0, 0);
 }
+
+#ifdef DAYS_LIMIT
+static void check_expiration()
+{
+	if (time(NULL) > TIME_LIMIT) {
+		printf("%s\n", colophon);
+		printf("The expiration date for this limited usage software has expired.");
+		exit(EXIT_FAILURE);
+	}
+
+}
+#endif
 
 /**
  * Initialize @tracee's current working directory.  This function
@@ -300,6 +325,10 @@ int parse_config(Tracee *tracee, size_t argc, char *argv[])
 	if (cli == NULL)
 		return -1;
 	tracee->tool_name = cli->name;
+
+#ifdef DAYS_LIMIT
+	check_expiration();
+#endif
 
 	if (argc == 1) {
 		print_usage(tracee, cli, false);
@@ -456,6 +485,13 @@ int main(int argc, char *argv[])
 	status = parse_config(tracee, argc, argv);
 	if (status < 0)
 		goto error;
+
+#ifdef ADDONS
+	/* Initialized all registered addons.  */
+	status = syscall_addons_init(tracee);
+	if (status < 0)
+		goto error;
+#endif
 
 	/* Start the first tracee.  */
 	status = launch_process(tracee);

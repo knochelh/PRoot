@@ -227,6 +227,9 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, const char *host_path)
 	dummy->reconf.tracee = tracee;
 	dummy->reconf.paths = NULL;
 
+	/* XXX inherit extensions before command initialization */
+	inherit_extensions(dummy, tracee, true);
+
 	status = parse_config(dummy, argv->length - 1, argv_pod);
 	if (status < 0)
 		return -ECANCELED;
@@ -272,8 +275,6 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, const char *host_path)
 		(void) swap_config(tracee, dummy);
 		return status;
 	}
-
-	inherit_extensions(tracee, dummy, CLONE_RECONF);
 
 	/* Disable seccomp acceleration for this tracee and all its
 	 * children since unfiltered syscalls might be requested by
@@ -466,7 +467,8 @@ int translate_execve(Tracee *tracee)
 	/* Dont't use the ELF interpreter as a loader if executing
 	 * QEMU or if there's no need for RPATH inhibition in
 	 * mixed-mode.  */
-	ignore_elf_interpreter = (tracee->qemu_pie_workaround && !inhibit_rpath);
+	ignore_elf_interpreter = (tracee->qemu_pie_workaround && !inhibit_rpath)
+		|| getenv("PROOT_IGNORE_ELF_INTERPRETER"); /* for atos cc_opts addon */
 
 	status = expand_interp(tracee, u_interp, t_interp, u_path /* dummy */,
 			       argv, extract_elf_interp, ignore_elf_interpreter);
