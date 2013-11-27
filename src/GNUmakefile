@@ -218,6 +218,9 @@ clean distclean:
 
 install: proot
 	$($(quiet)INSTALL) -D $< $(DESTDIR)/$<
+ifdef CARE
+	$(Q)cd $(DESTDIR) && ln -sf proot care
+endif
 
 uninstall:
 	-$(RM) -f $(DESTDIR)/proot
