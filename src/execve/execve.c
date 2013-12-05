@@ -141,6 +141,7 @@ static int expand_interp(Tracee *tracee, const char *u_path, char t_interp[PATH_
 
 	/* Note: argv[0] is not substituted if it is the NULL
 	 * terminator (argv->length == 1).  */
+	if (argv != NULL) {
 	if (argument[0] != '\0') {
 		status = resize_array(argv, 0, 2 + (argv->length == 1));
 		if (status < 0)
@@ -158,6 +159,7 @@ static int expand_interp(Tracee *tracee, const char *u_path, char t_interp[PATH_
 		status = write_items(argv, 0, 2, u_interp, u_path);
 		if (status < 0)
 			return status;
+	}
 	}
 
 	/* Remember at this point t_interp is the translation of
@@ -471,6 +473,17 @@ int translate_execve(Tracee *tracee)
 	ignore_elf_interpreter = (compare_paths(get_root(tracee), "/") == PATHS_ARE_EQUAL
 				  || (tracee->qemu_pie_workaround && !inhibit_rpath)
 				  || getenv("PROOT_IGNORE_ELF_INTERPRETER")); /* for atos cc_opts addon */
+
+	/* WORKAROUND for atos/care (see also expand_interp) */
+	/* elf interpreter should be archived by care even in */
+	/* PROOT_IGNORE_ELF_INTERPRETER mode */
+	if (ignore_elf_interpreter) {
+		char t_interp_tmp[PATH_MAX], u_path_tmp[PATH_MAX];
+		strcpy(t_interp_tmp, t_interp);
+		strcpy(u_path_tmp, u_path);
+		(void) expand_interp(tracee, u_interp, t_interp_tmp, u_path_tmp /* dummy */,
+				     NULL, extract_elf_interp, false);
+	}
 
 	status = expand_interp(tracee, u_interp, t_interp, u_path /* dummy */,
 			       argv, extract_elf_interp, ignore_elf_interpreter);
