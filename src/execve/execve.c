@@ -197,7 +197,7 @@ static int handle_sub_reconf(Tracee *tracee, Array *argv, const char *host_path)
 	 * Proot commands currently dont work when re-executed by care,
 	 * as care uses its own proot.
 	 */
-	if (strcmp(basename(host_path), basename(self_exe)) != 0 || argv->length <= 1)
+	if (strcmp(basename(host_path), "proot") != 0 || argv->length <= 1)
 		return 0;
 
 	/* Rebuild a POD argv[], as expected by parse_config().  */
