@@ -90,8 +90,6 @@ I_CPPFLAGS += -DENABLE_ADDONS
 OBJECTS += $(subst $(MAKEDIR)/,,$(subst .c,.o,$(wildcard $(addsuffix /*.c, $(addprefix $(MAKEDIR)/addons/, $(ENABLE_ADDONS))))))
 endif
 
-ifdef CARE
-
 CARE_OBJECTS = 				\
 	cli/care.o			\
 	cli/care-manual.o		\
