@@ -49,9 +49,6 @@ word_t translate_brk_enter(Tracee *tracee)
 	size_t old_heap_size;
 	size_t new_heap_size;
 
-	return 0; /* XXX TMP WORKAROUND disable heap emulation */
-
-
 	if (heap_offset == 0) {
 		heap_offset = sysconf(_SC_PAGE_SIZE);
 		if ((int) heap_offset <= 0)
@@ -139,8 +136,6 @@ void translate_brk_exit(Tracee *tracee)
 	word_t result;
 	word_t sysnum;
 	int tracee_errno;
-
-	return; /* XXX TMP WORKAROUND disable heap emulation */
 
 	assert(heap_offset > 0);
 
