@@ -46,7 +46,7 @@
  * executable and is a regular file.  This function returns -errno if
  * an error occured, 0 otherwise.
  */
-static int translate_n_check(Tracee *tracee, char t_path[PATH_MAX], const char *u_path)
+extern int translate_n_check(Tracee *tracee, char t_path[PATH_MAX], const char *u_path)
 {
 	struct stat statl;
 	int status;

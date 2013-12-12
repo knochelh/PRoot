@@ -150,7 +150,7 @@ static int modify_execve(cc_opts_config_t *config, Tracee *tracee, const char *p
 		goto end;
 	}
 
-	if (config->driver_cmd /* && !tracee->forced_elf_interpreter */) {
+	if (config->driver_cmd) {
 		status = set_sysarg_path(tracee, (char *)config->driver_cmd, SYSARG_1);
 		if (status < 0) goto end;
 
@@ -185,6 +185,7 @@ end:
 	return 0;
 }
 
+extern int translate_n_check(Tracee *, char *, const char *);
 
 /**
  * Process execve.
@@ -197,7 +198,6 @@ static int process_execve(Extension *extension, cc_opts_config_t *config, Tracee
 	char *argv0;
 	int status = 0;
 	int size = 0;
-	int index;
 	int changed = 0;
 
 	status = get_sysarg_path(tracee, u_path, SYSARG_1);
@@ -230,18 +230,19 @@ static int process_execve(Extension *extension, cc_opts_config_t *config, Tracee
 	   Compares with argv0 (not the actual path, as some driver installation may be symlinks)
 	   and check if basename argv0 matches driver_re.
 	*/
-	if (0/*tracee->forced_elf_interpreter*/) {
-		index = 1;
-	} else {
-		index = 0;
-	}
 
-	status = read_item_string(argv, index, &argv0);
+	status = read_item_string(argv, 0, &argv0);
 	if (status < 0 || argv0 == NULL)
 		goto end;
 
 	if (regexec(&config->driver_re, basename(argv0), 0, NULL, 0) == 0) {
-		index = find_item(envp, "PROOT_ADDON_CC_OPTS_ACTIVE");
+		char path[PATH_MAX];
+		status = translate_n_check(tracee, path, u_path);
+		if (status < 0) {
+			goto end;
+		}
+
+		int index = find_item(envp, "PROOT_ADDON_CC_OPTS_ACTIVE");
 		if (index < 0) {
 			status = index;
 			goto end;
@@ -505,7 +506,7 @@ static int cc_opts_callback(Extension *extension, ExtensionEvent event,
 		return cc_opts_inherit(extension, parent_extension);
 	}
 
-	case SYSCALL_ENTER_END:
+	case SYSCALL_ENTER_START:
 		return cc_opts_enter(extension);
 
 	case REMOVED:
