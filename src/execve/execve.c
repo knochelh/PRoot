@@ -471,8 +471,7 @@ int translate_execve(Tracee *tracee)
 	/* Dont't use the ELF interpreter as a loader if executing
 	 * QEMU or if there's no need for RPATH inhibition in
 	 * mixed-mode.  */
-	ignore_elf_interpreter = (tracee->qemu_pie_workaround && !inhibit_rpath)
-		|| getenv("PROOT_IGNORE_ELF_INTERPRETER"); /* for atos cc_opts addon */
+	ignore_elf_interpreter = (tracee->qemu_pie_workaround && !inhibit_rpath);
 
 	status = expand_interp(tracee, u_interp, t_interp, u_path /* dummy */,
 			       argv, extract_elf_interp, ignore_elf_interpreter);
