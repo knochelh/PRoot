@@ -181,9 +181,15 @@ static int archive_re_execute_sh(const Care *care)
 		C("'%s'", care->command[i]);
 	N("");
 
+	N("if [ x$PROOT_NO_SECCOMP != x ]; then");
+	N("    PROOT_NO_SECCOMP=\"PROOT_NO_SECCOMP=$PROOT_NO_SECCOMP\"");
+	N("fi");
+	N("");
+
 	C("env --ignore-environment");
 	C("PROOT_FORCE_KOMPAT=1");
 	C("PROOT_IGNORE_MISSING_BINDINGS=1");
+	C("$PROOT_NO_SECCOMP");
 
 	for (i = 0; environ[i] != NULL; i++) {
 		const char *volatile_envar;
@@ -285,35 +291,37 @@ static int archive_readme_txt(const Care *care)
 		return -1;
 	}
 
-	N("This archive was created with CARE: http://reproducible.io");
+	N("This archive was created with CARE: http://reproducible.io. It contains:");
 	N("");
-	N("It contains:");
+	N("re-execute.sh");
+	N("    start the re-execution of the initial command as originally");
+	N("    specified.  It is also possible to specify an alternate command.");
+	N("    For example, assuming gcc was archived, it can be re-invoked");
+	N("    differently:");
 	N("");
-	N("* re-execute.sh: start the re-execution of the initial command as originally");
-	N("      specified.  It is also possible to specify an alternate command.  For");
-	N("      example, assuming gcc was archived, it can be re-invoked differently:");
+	N("        $ ./re-execute.sh gcc --version");
+	N("        gcc (Ubuntu/Linaro 4.5.2-8ubuntu4) 4.5.2");
 	N("");
-	N("          $ ./re-execute.sh gcc --version");
-	N("          gcc (Ubuntu/Linaro 4.5.2-8ubuntu4) 4.5.2");
+	N("        $ echo 'int main(void) { return puts(\"OK\"); }' > rootfs/foo.c");
+	N("        $ ./re-execute.sh gcc -Wall /foo.c");
+	N("        $ foo.c: In function \"main\":");
+	N("        $ foo.c:1:1: warning: implicit declaration of function \"puts\"");
 	N("");
-	N("          $ echo 'int main(void) { return puts(\"OK\"); }' > rootfs/foo.c");
-	N("          $ ./re-execute.sh gcc -Wall /foo.c");
-	N("          $ foo.c: In function ‘main’:");
-	N("          $ foo.c:1:1: warning: implicit declaration of function ‘puts’");
+	N("rootfs/");
+	N("    directory where all the files used during the original execution");
+	N("    were archived, they will be required for the reproduced execution.");
 	N("");
-	N("* rootfs/: directory where all the files used during the original execution");
-	N("       were archived, they will be required for the reproduced execution.");
+	N("proot");
+	N("    virtualization tool invoked by re-execute.sh to confine the");
+	N("    reproduced execution into the rootfs.  It also emulates the");
+	N("    missing kernel features if needed.");
 	N("");
-	N("* proot: virtualization tool invoked by re-execute.sh to confine the reproduced");
-	N("      execution into the rootfs.  It also emulates the missing kernel features");
-	N("      if needed.");
+	N("concealed-accesses.txt");
+	N("    list of accessed paths that were concealed during the original");
+	N("    execution.  Its main purpose is to know what are the paths that");
+	N("    should be revealed if the the original execution didn't go as");
+	N("    expected.  It is absolutely useless for the reproduced execution.");
 	N("");
-	N("* concealed-accesses.txt: list of accessed paths that were concealed during the");
-	N("      original execution.  Its main purpose is to know what are the paths that");
-	N("      should be revealed if the the original execution didn't go as expected.");
-	N("      It is absolutely useless for the reproduced execution.");
-	N("");
-	N("* README.txt: this file :)");
 
 	return archive_close_file(care, file, "README.txt");
 }
@@ -366,6 +374,7 @@ static int archive_myself(const Care *care)
 int finalize_care(Care *care)
 {
 	int status;
+	char *hint;
 
 	/* Generate & archive the "re-execute.sh" script. */
 	status = archive_re_execute_sh(care);
@@ -391,9 +400,15 @@ int finalize_care(Care *care)
 
 	notice(NULL, INFO, USER,
 		"----------------------------------------------------------------------");
+	notice(NULL, INFO, USER, "Hints:");
 	notice(NULL, INFO, USER,
-		"If the execution didn't go as expected: search for \"conceal\" in `care -h`.");
-	notice(NULL, INFO, USER, "CARE output: %s", care->output);
+		"\t- if the execution didn't go as expected: search for \"conceal\" in `care -h`");
+
+	hint = talloc_asprintf(care, "\t- use the following command to extract the archive: %s", care->archive->howto_extract);
+	if (hint == NULL)
+		notice(NULL, INFO, USER, "CARE output: %s", care->output);
+	else
+		notice(NULL, INFO, USER, hint, care->output);
 
 	return 0;
 }

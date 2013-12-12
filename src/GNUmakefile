@@ -12,6 +12,7 @@ LD       = $(CC)
 CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I$(VPATH)
 CFLAGS   += -Wall -Wextra -O2
 LDFLAGS  += -ltalloc
+CARE_LDFLAGS = -larchive
 
 ifdef LIMITED_USE
 # For limited use and MIT license
@@ -46,7 +47,7 @@ ifdef ENABLE_ADDONS
 ENABLE_CEC_LIB=1
 endif
 
-OBJECTS = \
+OBJECTS += \
 	cli/cli.o		\
 	cli/proot.o		\
 	cli/notice.o		\
@@ -91,34 +92,23 @@ endif
 
 ifdef CARE
 
-OBJECTS +=				\
+CARE_OBJECTS = 				\
 	cli/care.o			\
 	cli/care-manual.o		\
 	extension/care/care.o		\
 	extension/care/final.o		\
 	extension/care/archive.o
 
-.INTERMEDIATE: manual
-manual: $(VPATH)/../doc/care-manual.txt
-	$(Q)cp $< $@
-
-cli/care-manual.o: manual cli/cli.o
-	$($(quiet)GEN)
-	$(Q)objcopy --input binary										\
-		--output `objdump -f cli/cli.o | perl -pe '/file format (.*)$$/; $$_ = $$1'`			\
-		--binary-architecture `objdump -f cli/cli.o | perl -pe '/architecture: (\w+).*/; $$_ = $$1'`	\
-		$< $@
-
-LDFLAGS += -larchive
-
-.DEFAULT_GOAL = care
-all: care
-
-else
-
 .DEFAULT_GOAL = proot
 all: proot
 
+######################################################################
+# Sanity checks
+
+ifneq (,$(findstring care,$(MAKECMDGOALS)))
+ifneq ($(CARE_BUILD_ENV),ok)
+$(error care is supposed to be built with: http://build.reproducible.io)
+endif
 endif
 
 ######################################################################
@@ -152,7 +142,7 @@ CHECK_ADDONS = 	if [ ! -z "$(ENABLE_ADDONS)" ]; \
 		then /bin/echo -e "\#define ADDONS \"$(ENABLE_ADDONS)\""; \
 		fi;
 
-CHECK_FEATURES = readlinkat process_vm seccomp_filter
+CHECK_FEATURES = process_vm seccomp_filter
 CHECK_PROGRAMS = $(foreach feature,$(CHECK_FEATURES),.check_$(feature))
 CHECK_OBJECTS  = $(foreach feature,$(CHECK_FEATURES),.check_$(feature).o)
 CHECK_RESULTS  = $(foreach feature,$(CHECK_FEATURES),.check_$(feature).res)
@@ -185,8 +175,20 @@ SRC     = $(dir $(firstword $(MAKEFILE_LIST)))
 COMPILE = $($(quiet)CC) $(CPPFLAGS) $(I_CPPFLAGS) $(CFLAGS) $(I_CFLAGS) -MD -c $(SRC)$(@:.o=.c) -o $@
 LINK    = $($(quiet)LD) -o $@ $^ $(LDFLAGS) $(I_LDFLAGS)
 
-proot care: $(OBJECTS)
+OBJIFY = $($(quiet)GEN)									\
+	objcopy										\
+		--input binary								\
+		--output `objdump -f cli/cli.o |					\
+			  perl -pe '/file format (.*)$$/; $$_ = $$1'`			\
+		--binary-architecture `objdump -f cli/cli.o |				\
+				       perl -pe '/architecture: (\w+).*/; $$_ = $$1'`	\
+		$< $@
+
+proot: $(OBJECTS)
 	$(LINK)
+
+care: $(OBJECTS) $(CARE_OBJECTS)
+	$(LINK) $(CARE_LDFLAGS)
 
 # Special case to compute which files depend on the auto-generated
 # file "build.h".
@@ -197,13 +199,23 @@ $(USE_BUILD_H): build.h
 	@mkdir -p $(dir $@)
 	$(COMPILE)
 
+.INTERMEDIATE: manual
+manual: $(VPATH)/../doc/care-manual.txt
+	$(Q)cp $< $@
+
+cli/care-manual.o: manual cli/cli.o
+	$(OBJIFY)
+
+cli/%-licenses.o: licenses cli/cli.o
+	$(OBJIFY)
+
 ######################################################################
 # Dependencies
 
 .DELETE_ON_ERROR:
-$(OBJECTS): $(firstword $(MAKEFILE_LIST))
+$(OBJECTS) $(CARE_OBJECTS): $(firstword $(MAKEFILE_LIST))
 
-DEPS = $(OBJECTS:.o=.d) $(CHECK_OBJECTS:.o=.d)
+DEPS = $(OBJECTS:.o=.d) $(CARE_OBJECTS:.o=.d) $(CHECK_OBJECTS:.o=.d)
 -include $(DEPS)
 
 ######################################################################
@@ -212,9 +224,9 @@ DEPS = $(OBJECTS:.o=.d) $(CHECK_OBJECTS:.o=.d)
 PREFIX = /usr/local
 DESTDIR = $(PREFIX)/bin
 
-.PHONY: clean distclean install uninstall
+.PHONY: clean distclean install install-care uninstall
 clean distclean:
-	-$(RM) -f $(CHECK_OBJECTS) $(CHECK_PROGRAMS) $(CHECK_RESULTS) $(OBJECTS) proot care cli/care-manual.o $(DEPS) build.h
+	-$(RM) -f $(CHECK_OBJECTS) $(CHECK_PROGRAMS) $(CHECK_RESULTS) $(OBJECTS) $(CARE_OBJECTS) proot care cli/care-manual.o $(DEPS) build.h licenses
 
 install: proot
 	$($(quiet)INSTALL) -D $< $(DESTDIR)/$<
@@ -222,5 +234,11 @@ ifdef CARE
 	$(Q)cd $(DESTDIR) && ln -sf proot care
 endif
 
+install-care: care
+	$($(quiet)INSTALL) -D $< $(DESTDIR)/$<
+
 uninstall:
 	-$(RM) -f $(DESTDIR)/proot
+
+uninstall-care:
+	-$(RM) -f $(DESTDIR)/care

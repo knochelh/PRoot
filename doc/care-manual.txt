@@ -6,7 +6,7 @@
 Comprehensive Archiver for Reproducible Execution
 -------------------------------------------------
 
-:Date: 2013-11-15
+:Date: 2013-12-02
 :Version: 2.0
 :Manual section: 1
 
@@ -24,9 +24,10 @@ CARE monitors the execution of the specified command to create an
 *archive* that contains all the material required to *re-execute* it
 in the same context.  That way, the command will be reproducible
 everywhere, even on Linux systems that are supposed to be not
-compatible with the original Linux system.  This is typically useful
+compatible with the original Linux system.  CARE is typically useful
 to get reliable bug reports, demonstrations, academic experiences,
-tutorials, ...
+tutorials, portable applications, minimal rootfs, file-system
+coverage, ...
 
 By default, the *reproduced* execution uses environment variables and
 files from the archive, not from the *actual* Linux system.  However,
@@ -38,11 +39,11 @@ automatize or document such external interaction.
 Privacy
 -------
 
-To ensure no sensible files will leak into the archive, CARE
-*conceals* recursively the content of ``$HOME`` and ``/tmp``, that is,
-they appear empty during the original execution.  Although, for
-consistency reasons, the content of ``$PWD`` is *revealed* even if it
-is nested into the two previous paths.
+To ensure that no sensitive file can possibly leak into the archive,
+CARE *conceals* recursively the content of ``$HOME`` and ``/tmp``,
+that is, they appear empty during the original execution.  Although,
+for consistency reasons, the content of ``$PWD`` is *revealed* even if
+it is nested into the two previous paths.
 
 As a consequence, a program executed under CARE may behave
 unexpectedly because a required path is not accessible anymore.  In
@@ -50,8 +51,7 @@ this case, such a path has to be revealed explicitly.  For details,
 see the options ``--concealed-path`` and ``--revealed-path``, and the
 file ``concealed-accesses.txt`` as well.
 
-By the way, it is highly recommended to have a look at the archived
-content.
+It is advised to inspect the archived content before sharing it.
 
 
 Options
@@ -63,26 +63,26 @@ options supported by CARE, that is, the first part of its command-line
 interface.
 
 -o file, --output=file
-    Write the archive in *file*, the suffix specify the format.
+    Write the archive in *file*, its suffix specifies the format.
 
     If this option is not specified, the default output file is
-    ``care-<DATE>.tar``.  The suffix of the *file* is used to select
+    ``care-<DATE>.cpio``.  The suffix of the *file* is used to select
     the archive format.  The following table illustrates the speed and
     size differences between the supported formats when creating a
     CARE archive for ``emacs --eval '(kill-emacs)'``:
 
-    ========  ==========  =============  ==========  ==========
-    format    total time  time overhead  final size  size ratio
-    ========  ==========  =============  ==========  ==========
-    .tar           2.20s           ref.      54.1MB        ref.
-    .tar.gz        3.96s            80%      21.6MB        0.40
-    .tar.lzo       2.45s            11%      27.5MB        0.51
-    ========  ==========  =============  ==========  ==========
+    =========  ==========  =============  ==========  ==========
+    format     total time  time overhead  final size  size ratio
+    =========  ==========  =============  ==========  ==========
+    .cpio           2.22s           ref.      80.6MB        ref.
+    .cpio.gz        4.93s           122%      32.8MB        0.40
+    .cpio.lzo       2.59s            17%      42.7MB        0.53
+    =========  ==========  =============  ==========  ==========
 
 -c path, --concealed-path=path
     Make *path* content appear empty during the original execution.
 
-    Some paths may contain sensible data that should never be
+    Some paths may contain sensitive data that should never be
     archived.  This is typically the case for most of the files in:
 
     * $HOME
@@ -132,9 +132,9 @@ interface.
     Some environment variables are used to communicate with programs
     that can't be monitored by CARE, like remote servers.  Such
     environment variables are said *volatile*; they shouldn't be
-    archived, instead they must be accessed from the *actual* value
-    during the re-execution.  This is typically the case for the
-    following ones:
+    archived, instead they must be accessed from the *actual*
+    environment during the re-execution.  This is typically the case
+    for the following ones:
 
     * DISPLAY
     * http_proxy
@@ -272,14 +272,15 @@ between each other, they decide to use CARE.  First, Alice prepends
     ./path/proc.c:132:3: warning: ignoring return value of 'strtol'
     [...]
      info: ----------------------------------------------------------------------
-     info: CARE output: care-130213072430.tar
+     info: CARE output: care-130213072430.cpio
 
-Then she send the ``care-130213072430.tar`` file to Bob.  Now, he
+Then she sends the ``care-130213072430.cpio`` file to Bob.  Now, he
 should be able to reproduce her issue on his system::
 
-    bob$ tar -xf care-130213072430.tar
+    bob$ cpio -idmuvF care-130213072430.cpio
+    [...]
     bob$ ./care-130213072430/re-execute.sh
-    
+
     make: Entering directory `PRoot-2.4/src'
     [...]
     CC    path/proc.o
@@ -287,7 +288,7 @@ should be able to reproduce her issue on his system::
     ./path/proc.c:132:3: warning: ignoring return value of 'strtol'
     [...]
 
-So far so good!  This compiler warning doesn't make sens to Bob since
+So far so good!  This compiler warning doesn't make sense to Bob since
 ``strtol`` is used there to check a string format; the return value is
 useless, only the ``errno`` value matters.  Further investigations are
 required, so Bob re-execute Alice's GCC differently to get more
@@ -334,10 +335,6 @@ Thanks to CARE, Bob was able to reproduce the issue reported by Alice
 without effort.  For investigations purpose, he was able to re-execute
 programs differently and to search into the relevant files.
 
-CARE is not only useful for bug reports, but also for demonstrations,
-academic experiences, tutorials, ...  Actually for anything that needs
-to be reproducible.
-
 .. [#] https://launchpad.net/ubuntu/oneiric/+source/gcc-4.5/4.5.2-8ubuntu4
 .. [#] https://launchpad.net/ubuntu/+source/eglibc/2.13-0ubuntu13.2
 
@@ -351,13 +348,13 @@ any Linux systems, it is highly recommended to build it with its
 dedicated build environment (http://build.reproducible.io), or to use
 following binaries:
 
-* for x86_64: http://reproducible.io/x86_64/care
+* for x86_64: http://static.reproducible.io/care-x86_64
 
-* for x86: *soon*
+* for x86: http://static.reproducible.io/care-x86
 
-* for ARM: *soon*
+* for ARM: http://static.reproducible.io/care-arm
 
-* for SH4/ST40: *soon*
+* other architectures: on demand.
 
 
 Colophon
