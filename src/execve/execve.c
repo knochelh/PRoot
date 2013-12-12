@@ -470,13 +470,11 @@ int translate_execve(Tracee *tracee)
 		inhibit_rpath = (status > 0);
 	}
 
-	/* Dont't use the ELF interpreter as a loader if the host one
-	 * is compatible (currently the test is only "guest rootfs ==
-	 * host rootfs") or if there's no need for RPATH inhibition in
+	/* Dont't use the ELF interpreter as a loader if executing
+	 * QEMU or if there's no need for RPATH inhibition in
 	 * mixed-mode.  */
-	ignore_elf_interpreter = (compare_paths(get_root(tracee), "/") == PATHS_ARE_EQUAL
-				  || (tracee->qemu_pie_workaround && !inhibit_rpath)
-				  || getenv("PROOT_IGNORE_ELF_INTERPRETER")); /* for atos cc_opts addon */
+	ignore_elf_interpreter = (tracee->qemu_pie_workaround && !inhibit_rpath)
+		|| getenv("PROOT_IGNORE_ELF_INTERPRETER"); /* for atos cc_opts addon */
 
 	/* WORKAROUND for atos/care (see also expand_interp) */
 	/* elf interpreter should be archived by care even in */
