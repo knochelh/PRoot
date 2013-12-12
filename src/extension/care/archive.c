@@ -71,14 +71,15 @@ static Format supported_formats[] = {
 		.hardlink_resolver_strategy = ARCHIVE_FORMAT_CPIO_POSIX,
 		.howto_extract	= "lzop -dc '%s' | cpio -idmuv",
 	},
-#if 0
 	{
 		.suffixes	= { ".tar", NULL },
 		.set_format	= archive_write_set_format_gnutar,
 		.add_filter	= NULL,
 		.options	= NULL,
 		.hardlink_resolver_strategy = ARCHIVE_FORMAT_TAR_GNUTAR,
+		.howto_extract	= "tar xvf '%s'",
 	},
+#if 0
 	{
 		.suffixes	= { ".tar.gz", ".tgz" },
 		.set_format	= archive_write_set_format_gnutar,
