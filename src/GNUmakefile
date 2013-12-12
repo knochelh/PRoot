@@ -228,9 +228,6 @@ clean distclean:
 
 install: proot
 	$($(quiet)INSTALL) -D $< $(DESTDIR)/$<
-ifdef CARE
-	$(Q)cd $(DESTDIR) && ln -sf proot care
-endif
 
 install-care: care
 	$($(quiet)INSTALL) -D $< $(DESTDIR)/$<
