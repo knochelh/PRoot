@@ -8,8 +8,11 @@
 #include <assert.h>
 #include <sys/stat.h>
 #include <linux/limits.h>
+#include <dirent.h>
+#include <libgen.h>
 
 #include "cec_lib.h"
+#include "path/path.h"
 #include "addons/syscall_addons.h"
 #include "extension/extension.h"
 
@@ -33,6 +36,7 @@ static char *reloc_dir = NULL;
 
 static cec_hash_t *ignored_pathes = NULL;
 static cec_hash_t *translated_pathes = NULL;
+static cec_hash_t *getdented_dirs = NULL;
 
 static char *predef_ignored_prefixes[] =
   {
@@ -68,13 +72,18 @@ static void __attribute__((destructor)) fini(void)
     cec_hash_del(ignored_pathes);
   if (translated_pathes != NULL)
     cec_hash_del(translated_pathes);
+  if (getdented_dirs != NULL)
+    cec_hash_del(getdented_dirs);
 }
 
+
+/* TODO: replace system() calls */
 
 static int reloc_exec_mkdir(char *path)
 {
   int status;
   char command[ARG_MAX];
+
   status = snprintf(command, ARG_MAX, "/bin/mkdir -p %s", path);
   if (status < 0)
     return status;
@@ -88,8 +97,23 @@ static int reloc_exec_copyfile(char *src, char *dstdir)
 {
   int status;
   char command[ARG_MAX];
+
+  {
+    struct stat statbuf;
+    char dstfile[PATH_MAX];
+
+    status = snprintf(dstfile, PATH_MAX, "%s/%s", dstdir, src);
+    if (status < 0)
+      return status;
+    status = stat(dstfile, &statbuf);
+    /* do not overwrite unless empty file */
+    /* (this should be ok as it is the 1st relocation) */
+    if (!status && statbuf.st_mode & S_IFREG && statbuf.st_size != 0)
+      return 0;
+  }
+
   status = snprintf(command, ARG_MAX,
-		    "/bin/cp --no-clobber --preserve --parents %s %s",
+		    "/bin/cp --preserve --parents %s %s",
 		    src, dstdir);
   if (status < 0)
     return status;
@@ -168,6 +192,10 @@ static int reloc_exec_init(Extension *extension)
 	(cec_hash_string, cec_compare_strings, cec_free_element);
       assert(translated_pathes != NULL);
 
+      getdented_dirs = cec_hash_new
+	(cec_hash_string, cec_compare_strings, cec_free_element);
+      assert(getdented_dirs != NULL);
+
       return reloc_exec_mkdir(reloc_dir);
     }
   return 0;
@@ -242,6 +270,15 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
 
   if (stat_status)
     {
+      /* no such file or directory */
+      /* create parent directory in reloc_dir if existing in srcdir */
+      char *parent = dirname(strdup(translated));
+      stat_status = stat(parent, &statbuf);
+      if ((!stat_status) && (statbuf.st_mode & S_IFDIR))
+	{
+	  status = reloc_exec_mkdir(dirname(strdup(relocated)));
+	  return status;
+	}
       return 0;
     }
   else if (statbuf.st_mode & S_IFDIR)
@@ -258,6 +295,73 @@ static int reloc_exec_enter(Extension *extension, intptr_t data1)
   return 0;
 }
 
+static int reloc_exec_getdents(Extension *extension)
+{
+  if (!active) return 0;
+
+  char path[PATH_MAX], command[ARG_MAX], *detranslated;
+  Tracee *tracee = TRACEE(extension);
+  int fd = (int)peek_reg(tracee, ORIGINAL, SYSARG_1);
+  int status, reloc_dir_len = strlen(reloc_dir);
+  DIR *dir_ptr;
+
+  status = readlink_proc_pid_fd(tracee->pid, fd, path);
+  if (status)
+    return status;
+
+  if (strncmp(path, reloc_dir, reloc_dir_len) != 0)
+    return 0;  /* non-relocated path */
+
+  detranslated = &path[0] + reloc_dir_len;
+  if (cec_hash_has_element(getdented_dirs, detranslated))
+    return 0;  /* fake dirent already created */
+  cec_hash_add_element(getdented_dirs, strdup(detranslated));
+
+  dir_ptr = opendir (detranslated);
+  if (dir_ptr == NULL)
+    return 0;
+
+  VERBOSE("   DIRENT for directory: %s\n", detranslated);
+
+  /* TODO: take care of access rights and access dates */
+  while (1)
+    {
+      struct dirent *dir_entry = readdir(dir_ptr);
+      if (dir_entry == NULL) break;
+
+      /* TODO: should be optimized (useless touch/mkdir system calls) */
+      switch (dir_entry->d_type)
+	{
+	case DT_REG:
+	case DT_LNK:
+	  status = snprintf
+	    (command, ARG_MAX, "/usr/bin/touch %s/%s",
+	     path, dir_entry->d_name);
+	  if (status < 0) break;
+	  VERBOSE("   DIRENT command: %s\n", command);
+	  status = system(command);  /* ignore status */
+	  break;
+
+	case DT_DIR:
+	    if (dir_entry->d_name[0] == '.')
+	      break; /* relative path (., ..) */
+	    status = snprintf
+	      (command, ARG_MAX, "/bin/mkdir -p %s/%s",
+	       path, dir_entry->d_name);
+	    if (status < 0) break;
+	    VERBOSE("   DIRENT command: %s\n", command);
+	    status = system(command);  /* ignore status */
+	    break;
+
+	default: /* DT_BLK, DT_CHR, DT_FIFO, DT_SOCK, DT_UNKNOWN */
+	  break;
+	}
+    }
+
+  (void)closedir(dir_ptr);
+
+  return 0;
+}
 
 static int reloc_exec_callback(Extension *extension, ExtensionEvent event,
 			    intptr_t data1, intptr_t data2)
@@ -270,6 +374,17 @@ static int reloc_exec_callback(Extension *extension, ExtensionEvent event,
 
     case TRANSLATED_PATH:
       return reloc_exec_enter(extension, data1);
+
+    case SYSCALL_ENTER_START:
+      switch (get_sysnum(TRACEE(extension), ORIGINAL))
+	{
+	case PR_getdents:
+	case PR_getdents64:
+	  return reloc_exec_getdents(extension);
+	default:
+	  break;
+	}
+      return 0;
 
     case INHERIT_PARENT:
       return 0;
